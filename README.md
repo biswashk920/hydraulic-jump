@@ -1,7 +1,6 @@
 # Hydraulic Jump and Gradually Varied Flow Profiler
 
-**Live app (runs in your browser, no install): https://YOUR-USERNAME.github.io/YOUR-REPO/**
-*(replace the link with your own once GitHub Pages is switched on, see "Publishing" below)*
+**Live app (runs in your browser, no install): https://biswashk920.github.io/YOUR-REPO/**
 
 ![Example: sluice gate followed by a mild channel, with the jump marked](examples/results/jump_gate_mild_profile.png)
 
