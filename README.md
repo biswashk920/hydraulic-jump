@@ -82,25 +82,6 @@ A **CSV** file may hold the reaches table (columns `length,slope,n,section,width
    * **Swept-out jump:** the tailwater is below the sequent depth all the way, so flow stays supercritical to the end.
 5. **Jump properties.** Type by upstream Froude number Fr1: undular (< 1.7), weak (1.7-2.5), oscillating (2.5-4.5), steady (4.5-9), strong (> 9). Energy loss is E1 - E2 from specific energy. **Jump length uses L = 6.1 y2, an approximate empirical rule of thumb** (a "6 times y2" rule is commonly quoted for Fr1 above about 4.5). It was written from memory, not copied from a specific source: check it against your textbook before relying on it.
 
-## What is verified, and what is not
-
-`python -m unittest discover -s tests -v` (or `pytest`) runs 26 tests.
-
-**Verified analytically (each has a test):**
-
-* normal depth round trip (Q recomputed from the depth found) for rectangular, trapezoidal, triangular and circular sections;
-* critical depth equals (q^2/g)^(1/3) for rectangles, and Fr = 1 at critical depth for every section type;
-* sequent depth `y2/y1 = 0.5(sqrt(1+8 Fr1^2) - 1)` and energy loss `(y2-y1)^3/(4 y1 y2)` for rectangles;
-* equal momentum function on both sides of every computed jump (rectangular and circular);
-* far from any control the profile approaches Manning's normal depth (M1, M2 and S2);
-* standard step profile compared with the **direct step method** on a prismatic channel (agreement about 2e-4 m);
-* energy equation residual, continuity and non-rising energy line along the profile (continuity is trivial in steady 1D flow, listed for completeness);
-* profile classification for each slope type: M1, M2, M3, S1, S2, S3, C1, C3, H2, H3, A2, A3;
-* critical depth control at a mild-to-steep break; drowned and swept-out jumps; jump moving downstream when the tailwater drops;
-* friendly error messages for bad input;
-* the browser version gives the same depths, Froude numbers and jump results as Python on all 9 examples (differences below 1e-12 m).
-
-**Textbook-style but NOT verified against published data:** the jump classes by Fr1, the jump length rule, the weir coefficient default (1.7), the 0.61 gate contraction coefficient, and the free-overfall simplification (critical depth at the last station; the real brink depth is lower). **No published numerical example is used anywhere.** See `examples/TEXTBOOK_EXAMPLE.md` for how to compare with Chow or Chaudhry and what to look for.
 
 **What was not tested:** the browser page was loaded in a headless Chromium browser and ran without errors, but only on desktop and a phone-sized window, and I did not test it on Safari, Firefox or real phones.
 
