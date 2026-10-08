@@ -1,0 +1,12 @@
+Mild to steep break (critical depth at the break)   (Q = 8 m3/s)
+
+Reach 1: mild (M) slope | normal depth 1.490 m | critical depth 0.742 m | profiles: M2
+Reach 2: steep (S) slope | normal depth 0.426 m | critical depth 0.742 m | profiles: S2, uniform
+
+Hydraulic jump: none
+
+Self-checks: energy_residual = 1.18e-06, continuity = 8.88e-16, egl_rise = 0.00e+00
+
+Warnings:
+  - Froude number is within 5% of 1 at 1 station(s) (x = 600.0 to 600.0 m). Results near critical depth are very sensitive; an undular jump or waves may occur in reality.
+  - Step size may be too coarse: depth changes by 14% in one step near x = 590.0 m. Use a smaller step.

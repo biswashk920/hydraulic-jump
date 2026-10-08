@@ -1,0 +1,7 @@
+M1 backwater behind a weir   (Q = 10 m3/s)
+
+Reach 1: mild (M) slope | normal depth 1.888 m | critical depth 0.657 m | profiles: M1
+
+Hydraulic jump: none
+
+Self-checks: energy_residual = 4.34e-10, continuity = 0.00e+00, egl_rise = 0.00e+00

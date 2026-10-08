@@ -1,0 +1,8 @@
+Sluice gate then mild channel (jump inside the channel)   (Q = 12 m3/s)
+
+Reach 1: mild (M) slope | normal depth 1.155 m | critical depth 0.837 m | profiles: M3, M1
+
+Hydraulic jump at x = 67.13 m (Reach 1): 0.506 m -> 1.292 m, Fr1 = 2.13 (weak), energy loss 0.186 m (11.3% of E1), length ~ 7.9 m (approximate)
+Note: Jump length L = 6.1 * y2 is an approximate empirical rule of thumb (commonly quoted for Fr1 above about 4.5); check it against your textbook.
+
+Self-checks: energy_residual = 1.94e-06, continuity = 1.78e-15, egl_rise = 0.00e+00

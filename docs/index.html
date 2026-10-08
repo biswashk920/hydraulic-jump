@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Hydraulic Jump and Gradually Varied Flow Profiler</title>
+<style>
+:root{color-scheme:dark;--bg:#0e1923;--pan:#15232f;--ln:#27394a;--tx:#d9e6ef;--mut:#8aa1b2;--water:#52c3e6;--egl:#e8c36a;--crit:#ef7d73;--norm:#7fcf9b;--jump:#f0a35e;--bed:#6d8296}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.5 "Segoe UI",system-ui,sans-serif}
+h1,h2{font-family:"Palatino Linotype",Palatino,Georgia,serif;font-weight:600;margin:0}
+h1{font-size:1.5rem}h2{font-size:1.1rem;margin-bottom:.5rem}
+header{padding:1rem 1.2rem;border-bottom:1px solid var(--ln)}header p{margin:.2rem 0 0;color:var(--mut);max-width:70ch}
+#out{min-width:0}main{display:grid;gap:1rem;padding:1rem 1.2rem;max-width:1400px;margin:auto}
+@media(min-width:960px){main{grid-template-columns:minmax(330px,420px) minmax(0,1fr);align-items:start}#form{position:sticky;top:.5rem;max-height:calc(100vh - 1rem);overflow:auto}}
+section,#form{background:var(--pan);border:1px solid var(--ln);border-radius:8px;padding:1rem;margin-bottom:1rem}
+.g{display:grid;grid-template-columns:1fr 1fr;gap:.6rem}label{display:block;font-weight:600;font-size:.9rem}
+label small{display:block;font-weight:400;color:var(--mut);font-size:.78rem;line-height:1.3;margin-top:.15rem}
+input,select,button{font:inherit;color:var(--tx);background:#0b141c;border:1px solid var(--ln);border-radius:6px;padding:.4rem .5rem;width:100%}
+button{cursor:pointer;width:auto;background:#1c3345}button.p{background:var(--water);color:#06202b;font-weight:700;border:0}
+:focus-visible{outline:2px solid var(--water);outline-offset:1px}
+fieldset{border:1px solid var(--ln);border-radius:6px;margin:.8rem 0;padding:.6rem}legend{font-weight:600;padding:0 .3rem}
+.row{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.6rem}.err{border-color:var(--crit);color:#ffd5d0}
+.w{color:var(--jump);font-size:.88rem;margin:.2rem 0}svg{width:100%;height:auto;display:block}
+.tw{overflow:auto;max-height:340px}table{border-collapse:collapse;font-size:.8rem;white-space:nowrap}
+th,td{padding:.2rem .5rem;border-bottom:1px solid var(--ln);text-align:right}th{position:sticky;top:0;background:#1c3345}
+dl{margin:0}dt{font-weight:600;margin-top:.5rem}dd{margin:0;color:var(--mut)}.k{color:var(--mut)}
+</style></head><body>
+<header><h1>Hydraulic Jump and Gradually Varied Flow Profiler</h1>
+<p>Gradually varied flow in open channels: standard step profiles, M/S/C/H/A classification, Froude number and hydraulic jump location.</p></header>
+<main><div id="form"></div><div id="out"></div></main>
+<script id="core">
+(function(root){
+"use strict";
+const G=9.81,LEN=6.1;
+function ERR(m){const e=new Error(m);e.friendly=true;return e}
+function num(v,n,pos,z0){if(v===""||v===null||v===undefined||!isFinite(Number(v)))throw ERR(n+" must be a number.");v=Number(v);if(pos&&(v<0||(v===0&&!z0)))throw ERR(n+" must be greater than zero (you gave "+v+").");return v}
+function mkSec(d){
+ if(!d||!d.type)throw ERR("each reach needs a section type.");
+ const t=String(d.type).toLowerCase();
+ if(t.startsWith("rect")){const b=num(d.width,"Rectangular channel width",1);return{kind:"rectangular",ymax:Infinity,b,area:y=>b*y,top:y=>b,perim:y=>b+2*y,mom:y=>b*y*y/2}}
+ if(t.startsWith("trap")){const b=num(d.width||0,"Trapezoid bottom width",1,1),z=num(d.side_slope||0,"Trapezoid side slope",1,1);if(b===0&&z===0)throw ERR("A trapezoid needs a bottom width or a side slope (both are zero).");const k=Math.sqrt(1+z*z);return{kind:"trapezoidal",ymax:Infinity,area:y=>(b+z*y)*y,top:y=>b+2*z*y,perim:y=>b+2*y*k,mom:y=>b*y*y/2+z*y*y*y/3}}
+ if(t.startsWith("circ")){const D=num(d.diameter,"Circular diameter",1),r=D/2,ph=y=>Math.acos(Math.max(-1,Math.min(1,1-2*Math.min(Math.max(y,1e-12),D)/D)));
+  return{kind:"circular",D,ymax:.99*D,area:y=>{const p=ph(y);return r*r*(p-Math.sin(p)*Math.cos(p))},top:y=>2*r*Math.sin(ph(y)),perim:y=>2*r*ph(y),mom:y=>{const p=ph(y),a=Math.sin(p),c=Math.cos(p);return 2/3*r*r*r*a*a*a-r*r*r*c*(p-a*c)}}}
+ throw ERR("unknown section type '"+d.type+"'. Use rectangular, trapezoidal or circular.")}
+function brent(f,a,b,tol){let fa=f(a),fb=f(b);if(fa===0)return a;if(fb===0)return b;if(fa*fb>0)throw ERR("internal error: root not bracketed.");
+ let c=a,fc=fa,d=b-a,e=d;
+ for(let i=0;i<200;i++){
+  if((fb>0&&fc>0)||(fb<0&&fc<0)){c=a;fc=fa;d=b-a;e=d}
+  if(Math.abs(fc)<Math.abs(fb)){a=b;b=c;c=a;fa=fb;fb=fc;fc=fa}
+  const t1=2*2.2e-16*Math.abs(b)+.5*tol,xm=.5*(c-b);
+  if(Math.abs(xm)<=t1||fb===0)return b;
+  if(Math.abs(e)>=t1&&Math.abs(fa)>Math.abs(fb)){let s=fb/fa,p,q;
+   if(a===c){p=2*xm*s;q=1-s}else{const qq=fa/fc,r=fb/fc;p=s*(2*xm*qq*(qq-r)-(b-a)*(r-1));q=(qq-1)*(r-1)*(s-1)}
+   if(p>0)q=-q;p=Math.abs(p);
+   if(2*p<Math.min(3*xm*q-Math.abs(t1*q),Math.abs(e*q))){e=d;d=p/q}else{d=xm;e=d}
+  }else{d=xm;e=d}
+  a=b;fa=fb;b+=Math.abs(d)>t1?d:(xm>0?t1:-t1);fb=f(b)}
+ return b}
+const fr=(s,Q,y)=>{const A=s.area(y);return Q/(A*Math.sqrt(G*A/s.top(y)))};
+const en=(s,Q,y)=>{const A=s.area(y);return y+Q*Q/(2*G*A*A)};
+const sfn=(s,n,Q,y)=>{const A=s.area(y),R=A/s.perim(y);return Math.pow(n*Q/(A*Math.pow(R,2/3)),2)};
+const mo=(s,Q,y)=>Q*Q/(G*s.area(y))+s.mom(y);
+const cap=(s,n,S,y)=>{const A=s.area(y);return Math.sqrt(S)/n*A*Math.pow(A/s.perim(y),2/3)};
+function gmax(f,a,b){const g=(Math.sqrt(5)-1)/2;let c=b-g*(b-a),d=a+g*(b-a);for(let i=0;i<80;i++){if(f(c)>f(d))b=d;else a=c;c=b-g*(b-a);d=a+g*(b-a)}return(a+b)/2}
+function normalDepth(s,Q,n,S){
+ if(S<=0)return null;
+ if(s.kind==="circular"){const yp=gmax(y=>cap(s,n,S,y),.5*s.D,s.D),qm=cap(s,n,S,yp);
+  if(Q>qm*(1+1e-9))throw ERR("this circular pipe cannot carry "+Q+" m3/s flowing partly full at this slope (maximum is about "+qm.toPrecision(3)+" m3/s). Use a larger diameter, a steeper slope or a smaller Q.");
+  return brent(y=>cap(s,n,S,y)-Q,1e-9*s.D,yp,1e-12)}
+ let hi=1;while(cap(s,n,S,hi)<Q){hi*=2;if(hi>1e6)throw ERR("no normal depth found (the discharge is far too large for this channel).")}
+ return brent(y=>cap(s,n,S,y)-Q,1e-9,hi,1e-12)}
+function critDepth(s,Q){const f=y=>Q*Q*s.top(y)/(G*Math.pow(s.area(y),3))-1;
+ if(s.kind==="circular"){if(f(s.ymax)>0)throw ERR("critical depth would be above 99% of the pipe diameter: the pipe is too small for this discharge.");return brent(f,1e-9*s.D,s.ymax,1e-12)}
+ let hi=1;while(f(hi)>0){hi*=2;if(hi>1e6)throw ERR("no critical depth found (the discharge is far too large for this channel).")}
+ return brent(f,1e-9,hi,1e-12)}
+function sequent(s,Q,y1,yc){
+ if(y1>yc*(1+1e-9))throw ERR("a hydraulic jump needs supercritical flow (depth below critical depth).");
+ if(y1>=yc*(1-1e-7))return yc;
+ const M1=mo(s,Q,y1),f=y=>mo(s,Q,y)-M1;let lo=yc,hi=Math.max(2*yc,2*y1);const cp=s.ymax;
+ while(f(Math.min(hi,cp))<0){if(hi>=cp)return null;lo=hi;hi*=2}
+ return brent(f,lo,Math.min(hi,cp),1e-12)}
+const JC=[[1.7,"undular"],[2.5,"weak"],[4.5,"oscillating"],[9,"steady"],[Infinity,"strong"]];
+const jtype=f=>JC.find(c=>f<c[0])[1];
+function solveStep(cx,pa,ya,pb,sup){
+ const Q=cx.Q,ra=cx.R[pa[2]],rb=cx.R[pb[2]],L=Math.abs(pb[0]-pa[0]),d=pb[0]>pa[0]?1:-1,Aa=ra.sec.area(ya);
+ const Ha=pa[1]+ya+Q*Q/(2*G*Aa*Aa),Sa=sfn(ra.sec,ra.n,Q,ya),sec=rb.sec,zb=pb[1],n=rb.n;
+ const F=y=>{const A=sec.area(y);return zb+y+Q*Q/(2*G*A*A)+d*.5*(Sa+sfn(sec,n,Q,y))*L-Ha};
+ const yc=rb.yc,Fc=F(yc);
+ if(Math.abs(Fc)<=1e-9)return yc;if(Fc>0)return null;
+ let lo,hi;
+ if(sup){hi=yc;lo=yc*.9;while(F(lo)<0){hi=lo;lo*=.5;if(lo<1e-9)return null}}
+ else{lo=yc;hi=yc*1.1;const cp=sec.ymax;while(F(Math.min(hi,cp))<0){if(hi>=cp||hi>1e6)return null;lo=hi;hi*=1.6}hi=Math.min(hi,cp)}
+ return brent(F,lo,hi,cx.tol)}
+function tryStep(cx,i,y,j,sup){
+ const pa=[cx.xs[i],cx.zs[i],cx.rs[i]],pb=[cx.xs[j],cx.zs[j],cx.rs[j]],r=solveStep(cx,pa,y,pb,sup);
+ if(r!==null||pa[0]===pb[0])return[r,false];
+ for(let k=1;k<8;k++){const n=Math.pow(2,k);let yy=y,p=pa,ok=true;
+  for(let s=1;s<=n;s++){const t=s/n,q=[pa[0]+(pb[0]-pa[0])*t,pa[1]+(pb[1]-pa[1])*t,pb[2]];yy=solveStep(cx,p,yy,q,sup);if(yy===null){ok=false;break}p=q}
+  if(ok)return[yy,true]}
+ return[null,false]}
+function sweep(cx,i0,y0,dir,sup){const ys={};ys[i0]=y0;const fine=[];let i=i0,y=y0;const N=cx.xs.length;
+ while(i+dir>=0&&i+dir<N){const j=i+dir,[r,sb]=tryStep(cx,i,y,j,sup);if(r===null)break;if(sb)fine.push(j);ys[j]=y=r;i=j}
+ return{ys,fine}}
+function classify(r,y,flow){const yn=r.yn,yc=r.yc,c=r.cls;
+ if((c==="M"||c==="S")&&Math.abs(y-yn)<=.01*yn)return"uniform";
+ const a=flow==="subcritical"?y>=yc*(1-1e-6):y>yc*(1+1e-6);
+ if(c==="M")return y>yn?"M1":a?"M2":"M3";
+ if(c==="S")return a?"S1":y>yn?"S2":"S3";
+ if(c==="C")return a?"C1":"C3";
+ return c+(a?2:3)}
+const UPT=["normal","depth","level","gate","critical","none"],DNT=["normal","depth","level","weir","overfall","none"];
+function bcDepth(bc,side,R,Q){
+ const up=side==="upstream",r=up?R[0]:R[R.length-1];bc=bc||{type:"normal"};const t=String(bc.type||"normal").toLowerCase();
+ if((up?UPT:DNT).indexOf(t)<0)throw ERR("the "+side+" condition '"+t+"' is not available.");
+ const w="the "+side+" condition";
+ if(t==="none")return[null,t];
+ if(t==="normal"){if(r.yn===null)throw ERR("the "+side+" reach has a "+(r.S0===0?"horizontal":"adverse")+" slope, so it has no normal depth. Choose another "+side+" condition (for example a depth).");return[r.yn,t]}
+ if(t==="critical"||t==="overfall")return[r.yc,t];
+ if(t==="depth")return[num(bc.depth,w+": depth",1),t];
+ if(t==="level"){const l=num(bc.level,w+": water surface elevation"),zb=up?r.z0:r.z0-r.S0*r.L;if(l-zb<=0)throw ERR("the "+w+" water level ("+l+" m) is not above the channel bed ("+zb.toFixed(3)+" m).");return[l-zb,t]}
+ if(t==="gate")return[num(bc.cc??.61,w+": contraction coefficient",1)*num(bc.opening,w+": gate opening",1),t];
+ if(t==="weir"){if(r.sec.kind!=="rectangular")throw ERR("the weir option works only for a rectangular last reach. For other sections, enter the tailwater depth directly.");
+  const cr=num(bc.crest,w+": weir crest height",1,1),cw=num(bc.cw??1.7,w+": weir coefficient",1);return[cr+Math.pow(Q/(cw*r.sec.b),2/3),t]}}
+function compute(spec){
+ if(!spec||typeof spec!=="object")throw ERR("the channel description is missing.");
+ const Q=num(spec.discharge,"Discharge Q",1),zs0=num(spec.start_bed_elevation??100,"Starting bed elevation"),step=num(spec.step??1,"Step size",1),tol=num(spec.tolerance??1e-6,"Tolerance",1);
+ const RL=spec.reaches;if(!Array.isArray(RL)||!RL.length)throw ERR("add at least one reach to the channel.");
+ const res={name:String(spec.name||"channel"),Q,warnings:[],jumps:[],reaches:[],rows:[]},W=res.warnings,R=[];
+ let x0=0,z0=zs0;
+ RL.forEach((rd,k)=>{const tag="Reach "+(k+1),r={idx:k,name:tag};
+  r.L=num(rd.length,tag+": length",1);r.S0=num(rd.slope,tag+": bed slope");r.n=num(rd.n??.015,tag+": Manning's n",1);
+  try{r.sec=mkSec(rd.section);r.yc=critDepth(r.sec,Q);r.yn=normalDepth(r.sec,Q,r.n,r.S0)}catch(e){if(e.friendly)e.message=tag+": "+e.message;throw e}
+  if(r.S0<=0){r.kind="sub";r.cls=r.S0===0?"H":"A"}
+  else{const rel=(r.yn-r.yc)/r.yc;if(rel>.01){r.kind="sub";r.cls="M"}else if(rel<-.01){r.kind="sup";r.cls="S"}else{r.kind="crit";r.cls="C"}}
+  r.x0=x0;r.z0=z0;R.push(r);x0+=r.L;z0-=r.S0*r.L});
+ const m=R.length,xs=[],rs=[],zs=[],first=[],last=[];
+ const cnt=R.map(r=>Math.max(20,Math.ceil(r.L/step-1e-9))),tot=cnt.reduce((a,c)=>a+c+1,0);
+ if(tot>20000)throw ERR("that would need "+tot+" stations. Increase the step size (limit 20000 stations).");
+ R.forEach((r,q)=>{const ns=cnt[q];first[q]=xs.length;for(let k=0;k<=ns;k++){const x=r.x0+r.L*k/ns;xs.push(x);rs.push(q);zs.push(r.z0-r.S0*(x-r.x0))}last[q]=xs.length-1});
+ const N=xs.length,cx={Q,R,xs,rs,zs,tol},seeds=[],ctrl=new Set();
+ const[yu,tu]=bcDepth(spec.upstream,"upstream",R,Q),[yd,td]=bcDepth(spec.downstream,"downstream",R,Q),r0=R[0],rl=R[m-1];
+ if(yu===null){}
+ else if(tu==="normal"?yu<r0.yc*(1-1e-6):yu<=r0.yc*(1+1e-6))seeds.push([0,Math.min(yu,r0.yc),true]);
+ else if(tu!=="normal"&&tu!=="critical")W.push("The upstream "+tu+" gives a subcritical depth ("+yu.toFixed(3)+" m). Subcritical flow is controlled from downstream, so this upstream condition has no effect and was ignored.");
+ if(yd===null){}
+ else if(yd>=rl.yc*(1-1e-6))seeds.push([N-1,Math.max(yd,rl.yc),false]);
+ else if(td!=="normal"){
+  if(rl.kind!=="sub")W.push("The downstream depth ("+yd.toFixed(3)+" m) is below critical depth ("+rl.yc.toFixed(3)+" m). Supercritical flow cannot be affected from downstream, so it was ignored.");
+  else{const yf=rl.yn!==null?rl.yn:rl.yc;W.push("The downstream depth ("+yd.toFixed(3)+" m) is below critical depth ("+rl.yc.toFixed(3)+" m) in a reach whose flow should be subcritical. It was replaced by "+(rl.yn!==null?"normal":"critical")+" depth ("+yf.toFixed(3)+" m).");seeds.push([N-1,yf,false])}}
+ const rank={sub:0,crit:1,sup:2};
+ for(let k=0;k<m-1;k++)if(rank[R[k].kind]<rank[R[k+1].kind]){const i=first[k+1];ctrl.add(i);seeds.push([i,R[k+1].yc,true],[i,R[k+1].yc,false])}
+ const sup=Array(N).fill(null),sub=Array(N).fill(null),fine=new Set();
+ for(const[i,y,isSup]of seeds){const s=sweep(cx,i,y,isSup?1:-1,isSup),arr=isSup?sup:sub;s.fine.forEach(f=>fine.add(f));
+  for(const k in s.ys){const j=+k,v=s.ys[k];if(arr[j]===null||(isSup&&v<arr[j])||(!isSup&&v>arr[j]))arr[j]=v}}
+ const M=(i,y)=>mo(R[rs[i]].sec,Q,y);
+ function locate(i,forced){
+  const a=i-1,b=i,ra=rs[a],rb=rs[b];let x,ri,y1;
+  if(forced){x=xs[a];ri=ra;y1=sup[a];W.push("The supercritical profile reaches critical depth near x = "+x.toFixed(1)+" m; the jump position there is approximate.")}
+  else if(ra===rb&&xs[b]>xs[a]&&sub[b]!==null){
+   const rr=R[ra],sec=rr.sec,pa=[xs[a],zs[a],ra],pb=[xs[b],zs[b],rb],at=t=>[t,rr.z0-rr.S0*(t-rr.x0),ra];
+   const y1f=t=>solveStep(cx,pa,sup[a],at(t),true),y2f=t=>solveStep(cx,pb,sub[b],at(t),false);
+   const g=t=>{const u=y1f(t),w=y2f(t);return u===null||w===null?null:mo(sec,Q,u)-mo(sec,Q,w)};
+   const ga=g(xs[a]),gb=g(xs[b]);x=xs[b];
+   if(ga!==null&&gb!==null&&ga>0&&gb<=0)x=brent(t=>{const v=g(t);return v===null?-1:v},xs[a],xs[b],1e-9);
+   y1=y1f(x);ri=ra;if(y1===null){x=xs[b];y1=sup[b]}}
+  else{x=xs[b];ri=rb;y1=sup[b]}
+  const r=R[ri];y1=Math.min(y1,r.yc*(1-1e-9));let y2=sequent(r.sec,Q,y1,r.yc);
+  if(y2===null){y2=r.sec.ymax;W.push("The jump would fill the pipe (pressurised flow); this is not modelled.")}
+  return{status:"free",x,reach:ri,y1,y2}}
+ const yf=Array(N).fill(NaN),state=Array(N).fill(null),jb={},undef=[];let st=null;
+ for(let i=0;i<N;i++){const su=sup[i],sb=sub[i];
+  if(i===0){
+   if(su!==null&&sb!==null&&M(0,su)<=M(0,sb)*(1+1e-10)){st="sub";const y2=sequent(R[0].sec,Q,su,R[0].yc);res.jumps.push({status:"drowned",x:0,reach:0,y1:su,y2:y2||sb,y_tail:sb})}
+   else if(su!==null)st="sup";else if(sb!==null)st="sub"}
+  else if(ctrl.has(i)&&su!==null){st="sup"}
+  else if(st==="sup"){
+   if(su===null||(sb!==null&&M(i,su)<=M(i,sb)*(1+1e-10))){if(sb===null)undef.push(xs[i]);else{jb[i]=locate(i,su===null);st="sub"}}}
+  else if(st==="sub"){if(sb===null&&su!==null){W.push("Near x = "+xs[i].toFixed(1)+" m the subcritical profile reaches critical depth going upstream; the profile continues as supercritical flow.");st="sup"}}
+  else if(st===null)st=su!==null?"sup":sb!==null?"sub":null;
+  state[i]=st;const v=st==="sup"?su:st==="sub"?sb:null;
+  if(v===null&&st!==null)undef.push(xs[i]);else yf[i]=v===null?NaN:v}
+ if(undef.length)W.push("The profile could not be computed between x = "+Math.min(...undef).toFixed(1)+" m and "+Math.max(...undef).toFixed(1)+" m: the flow would have to pass through critical depth in a way this method cannot represent (for example choking, or a profile that reaches critical depth upstream of a control).");
+ if(state[N-1]==="sup"&&sub[N-1]!==null){const y1e=yf[N-1],y2=sequent(rl.sec,Q,Math.min(y1e,rl.yc*(1-1e-9)),rl.yc);res.jumps.push({status:"swept",x:xs[N-1],reach:m-1,y1:y1e,y2:y2||rl.sec.ymax,y_tail:sub[N-1]})}
+ const rows=res.rows;let seg=0;
+ const row=(x,ri,y,flow,note,sg)=>{const r=R[ri],s=r.sec,z=r.z0-r.S0*(x-r.x0),v=Q/s.area(y),e=y+v*v/(2*G);return{x,reach:ri+1,z,y,wse:z+y,v,fr:fr(s,Q,y),e,sf:sfn(s,r.n,Q,y),egl:z+e,ptype:classify(r,y,flow),flow,note,seg:sg,_r:ri,_ctl:false,_fine:false}};
+ for(let i=0;i<N;i++){
+  if(jb[i]){const j=jb[i];rows.push(row(j.x,j.reach,j.y1,"supercritical","jump: before",seg));seg++;rows.push(row(j.x,j.reach,j.y2,"subcritical","jump: after",seg));res.jumps.push(j)}
+  if(isNaN(yf[i]))continue;
+  const r=rs[i];let note="";
+  if(i===first[r]&&r>0)note="start of reach "+(r+1);else if(i===last[r]&&r<m-1)note="end of reach "+(r+1);
+  if(ctrl.has(i))note=(note?note+"; ":"")+"critical depth control";
+  const rw=row(xs[i],r,yf[i],state[i]==="sup"?"supercritical":"subcritical",note,seg);
+  rw._ctl=ctrl.has(i)||(i===0&&tu==="critical")||(i===N-1&&td==="overfall");rw._fine=fine.has(i);rows.push(rw)}
+ for(const j of res.jumps){const r=R[j.reach];j.reach_name=r.name;const y1=Math.min(j.y1,r.yc*(1-1e-9)),e1=en(r.sec,Q,y1),e2=en(r.sec,Q,j.y2),f1=fr(r.sec,Q,y1);
+  Object.assign(j,{fr1:f1,fr2:fr(r.sec,Q,j.y2),type:jtype(f1),e1,e2,loss:e1-e2,loss_pct:100*(e1-e2)/e1,length:LEN*j.y2});
+  if(j.status==="free")for(let q=0;q<m-1;q++)if(Math.abs(j.x-(R[q].x0+R[q].L))<j.length)W.push("The jump (length ~ "+j.length.toFixed(1)+" m) is close to the junction between reach "+(q+1)+" and reach "+(q+2)+"; the jump equations assume one uniform section.")}
+ if(rows.length){
+  const f=rows.filter(r=>r.fr>.95&&r.fr<1.05&&!r._ctl);
+  if(f.length)W.push("Froude number is within 5% of 1 at "+f.length+" station(s) (x = "+f[0].x.toFixed(1)+" to "+f[f.length-1].x.toFixed(1)+" m). Results near critical depth are very sensitive; an undular jump or waves may occur in reality.");
+  let wd=0,wx=0;for(let k=0;k<rows.length-1;k++){const a=rows[k],b=rows[k+1];if(a.seg===b.seg&&a._r===b._r&&b.x>a.x&&!(a._ctl||b._ctl)){const d=Math.abs(b.y-a.y)/Math.max(a.y,b.y);if(d>wd){wd=d;wx=a.x}}}
+  const nf=rows.filter(r=>r._fine).length;
+  if(nf)W.push("The step size was too coarse at "+nf+" station(s) near critical depth; the solver used smaller internal sub-steps there. Use a smaller step for a cleaner profile.");
+  if(wd>.10)W.push("Step size may be too coarse: depth changes by "+Math.round(100*wd)+"% in one step near x = "+wx.toFixed(1)+" m. Use a smaller step.")}
+ R.forEach(r=>{if(r.sec.kind==="circular"){if(r.yn!==null&&cap(r.sec,r.n,r.S0,r.sec.D)<Q)W.push(r.name+": Q is more than the full-pipe capacity, so the normal depth is above ~82% of the diameter and the flow may become pressurised (not modelled).");
+  if(Math.max(0,...rows.filter(w=>w._r===r.idx).map(w=>w.y))>.95*r.sec.D)W.push(r.name+": depth exceeds 95% of the diameter; full-pipe flow is not modelled.")}});
+ const nm={M:"mild",S:"steep",C:"critical",H:"horizontal",A:"adverse"};
+ R.forEach(r=>{const types=[];rows.forEach(w=>{if(w._r===r.idx&&types.indexOf(w.ptype)<0)types.push(w.ptype)});
+  res.reaches.push({name:r.name,slope_class:nm[r.cls]+" ("+r.cls+")",yn:r.yn,yc:r.yc,types,x0:r.x0,x1:r.x0+r.L,z0:r.z0,S0:r.S0})});
+ return res}
+root.GVF={compute,LEN};
+})(typeof window!=="undefined"?window:globalThis);
+</script>
+<script>window.PRESETS=[{"name":"Sluice gate then mild channel (jump inside the channel)","discharge":12.0,"start_bed_elevation":100.0,"step":2.0,"tolerance":1e-06,"upstream":{"type":"gate","opening":0.5,"cc":0.61},"downstream":{"type":"depth","depth":1.4},"reaches":[{"length":300,"slope":0.001,"n":0.013,"section":{"type":"rectangular","width":5}}]},{"name":"M1 backwater behind a weir","discharge":10.0,"start_bed_elevation":50.0,"step":20.0,"upstream":{"type":"normal"},"downstream":{"type":"weir","crest":1.5,"cw":1.7},"reaches":[{"length":3000,"slope":0.0004,"n":0.025,"section":{"type":"rectangular","width":6}}]},{"name":"Mild to steep break (critical depth at the break)","discharge":8.0,"start_bed_elevation":100.0,"step":10.0,"upstream":{"type":"normal"},"downstream":{"type":"normal"},"reaches":[{"length":600,"slope":0.0005,"n":0.015,"section":{"type":"rectangular","width":4}},{"length":600,"slope":0.02,"n":0.015,"section":{"type":"rectangular","width":4}}]},{"name":"Steep to mild: jump forms in the mild reach","discharge":8.0,"start_bed_elevation":100.0,"step":5.0,"upstream":{"type":"critical"},"downstream":{"type":"normal"},"reaches":[{"length":300,"slope":0.08,"n":0.015,"section":{"type":"rectangular","width":4}},{"length":600,"slope":0.0005,"n":0.015,"section":{"type":"rectangular","width":4}}]},{"name":"Drowned jump (tailwater too high)","discharge":12.0,"start_bed_elevation":100.0,"step":5.0,"upstream":{"type":"gate","opening":0.5},"downstream":{"type":"depth","depth":2.6},"reaches":[{"length":200,"slope":0.001,"n":0.013,"section":{"type":"rectangular","width":5}}]},{"name":"Swept-out jump (tailwater too low)","discharge":12.0,"start_bed_elevation":100.0,"step":5.0,"upstream":{"type":"gate","opening":0.5},"downstream":{"type":"depth","depth":0.95},"reaches":[{"length":120,"slope":0.001,"n":0.013,"section":{"type":"rectangular","width":5}}]},{"name":"Two reaches: changing slope and roughness","discharge":15.0,"start_bed_elevation":200.0,"step":25.0,"upstream":{"type":"normal"},"downstream":{"type":"depth","depth":2.4},"reaches":[{"length":1500,"slope":0.0008,"n":0.03,"section":{"type":"trapezoidal","width":5,"side_slope":1.5}},{"length":1500,"slope":0.0003,"n":0.022,"section":{"type":"trapezoidal","width":5,"side_slope":1.5}}]},{"name":"Circular culvert: steep pipe into a mild pipe (jump)","discharge":1.6,"start_bed_elevation":30.0,"step":2.0,"upstream":{"type":"critical"},"downstream":{"type":"normal"},"reaches":[{"length":60,"slope":0.03,"n":0.013,"section":{"type":"circular","diameter":1.2}},{"length":100,"slope":0.002,"n":0.013,"section":{"type":"circular","diameter":1.2}}]},{"name":"Horizontal then adverse slope ending in a free overfall (H2, A2)","discharge":3.0,"start_bed_elevation":10.0,"step":5.0,"upstream":{"type":"none"},"downstream":{"type":"overfall"},"reaches":[{"length":200,"slope":0.0,"n":0.015,"section":{"type":"rectangular","width":3}},{"length":150,"slope":-0.0005,"n":0.015,"section":{"type":"rectangular","width":3}}]}];</script>
+<script id="ui">
+(function(){
+const $=s=>document.querySelector(s),P=window.PRESETS,D=s=>JSON.parse(JSON.stringify(s));
+let st,res;
+const UPT={normal:"Normal depth (steady uniform flow)",critical:"Critical depth (lake or reservoir entrance)",gate:"Sluice gate (fast, shallow start)",depth:"Known depth",level:"Known water level",none:"None / free"};
+const DNT={normal:"Normal depth (steady uniform flow)",overfall:"Free overfall (drop at the end)",weir:"Weir (rectangular channel only)",depth:"Known tailwater depth",level:"Known water level (lake)",none:"None / free"};
+const BF={depth:[["depth","Depth (m)"]],level:[["level","Water surface elevation (m)"]],gate:[["opening","Gate opening (m)"],["cc","Contraction coefficient Cc"]],weir:[["crest","Crest height above bed (m)"],["cw","Weir coefficient Cw"]]};
+const HELP={upstream:"A gate or a critical-depth start gives supercritical flow. A mild channel fed from far upstream needs no condition here.",downstream:"Subcritical flow is controlled from the downstream end, so a tailwater depth or weir decides where a jump forms."};
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const inp=(p,l,h,v)=>`<label>${l}<input data-p="${p}" value="${esc(v??"")}" inputmode="decimal" autocomplete="off">${h?`<small>${h}</small>`:""}</label>`;
+const sel=(p,l,o,v,h)=>`<label>${l}<select data-p="${p}">${Object.keys(o).map(k=>`<option value="${k}"${k==v?" selected":""}>${o[k]}</option>`).join("")}</select>${h?`<small>${h}</small>`:""}</label>`;
+const bc=(s,T,l)=>{const b=st[s]||{type:"normal"},t=b.type||"normal";return`<fieldset><legend>${l}</legend>${sel(s+".type","Condition",T,t,HELP[s])}<div class="g">${(BF[t]||[]).map(f=>inp(s+"."+f[0],f[1],"",b[f[0]])).join("")}</div></fieldset>`};
+const SEC={rectangular:"Rectangular",trapezoidal:"Trapezoidal",circular:"Circular"};
+function reach(r,i){const s=r.section||{},t=s.type||"rectangular",p="reaches."+i+".";
+ const dims=t=="rectangular"?inp(p+"section.width","Width (m)","",s.width):t=="trapezoidal"?inp(p+"section.width","Bottom width (m)","",s.width)+inp(p+"section.side_slope","Side slope (H per 1 V)","",s.side_slope):inp(p+"section.diameter","Diameter (m)","",s.diameter);
+ return`<fieldset><legend>Reach ${i+1}</legend><div class="g">${inp(p+"length","Length (m)","",r.length)}${inp(p+"slope","Bed slope (m/m)","Positive falls downstream; 0 is horizontal; negative is adverse (bed rises).",r.slope)}${inp(p+"n","Manning's n","About 0.013 smooth concrete, 0.03 earth channel.",r.n)}${sel(p+"section.type","Cross-section",SEC,t)}${dims}</div>${st.reaches.length>1?`<div class="row"><button data-a="del${i}">Remove reach ${i+1}</button></div>`:""}</fieldset>`}
+function render(){
+ $("#form").innerHTML=`<h2>Channel</h2><label>Example<select id="pre">${P.map((p,i)=>`<option value="${i}">${esc(p.name)}</option>`).join("")}</select></label>
+ <div class="g" style="margin-top:.6rem">${inp("discharge","Design discharge Q (m³/s)","Flow the channel carries.",st.discharge)}${inp("start_bed_elevation","Start bed elevation (m)","Bed level at the upstream end.",st.start_bed_elevation)}${inp("step","Step size (m)","Distance between calculation points; smaller is more accurate.",st.step)}${inp("tolerance","Tolerance (m)","How closely each depth is solved.",st.tolerance)}</div>
+ ${bc("upstream",UPT,"Upstream end")}${bc("downstream",DNT,"Downstream end")}${st.reaches.map(reach).join("")}
+ <div class="row"><button data-a="add">Add reach</button><label style="display:flex;gap:.4rem;align-items:center;width:auto"><input type="checkbox" data-p="egl" style="width:auto"${st.egl?" checked":""}>Show energy grade line</label></div>
+ <div class="row"><button class="p" data-a="run">Compute profile</button></div>
+ <details style="margin-top:1rem"><summary>Plain-language glossary</summary><dl>
+ <dt>Mild slope</dt><dd>Normal depth is greater than critical depth: flow is calm (subcritical) when uniform.</dd>
+ <dt>Steep slope</dt><dd>Normal depth is less than critical depth: flow is fast (supercritical) when uniform.</dd>
+ <dt>Critical slope</dt><dd>Normal depth equals critical depth. Horizontal and adverse slopes have no normal depth.</dd>
+ <dt>Normal depth</dt><dd>Depth of steady uniform flow (Manning's equation).</dd>
+ <dt>Critical depth</dt><dd>Depth where the Froude number is 1 and specific energy is smallest.</dd>
+ <dt>Froude number</dt><dd>Velocity divided by wave speed. Below 1 subcritical, above 1 supercritical.</dd>
+ <dt>Hydraulic jump</dt><dd>Abrupt change from fast shallow flow to slow deep flow, with energy loss.</dd>
+ <dt>Sequent depth</dt><dd>The depth after the jump: it has the same momentum as the depth before it.</dd>
+ <dt>Energy grade line (EGL)</dt><dd>Water surface plus velocity head; it always falls in the flow direction.</dd></dl></details>`;
+ $("#pre").value=cur}
+let cur=0;
+function read(){document.querySelectorAll("[data-p]").forEach(e=>{const k=e.dataset.p.split(".");let o=st;for(let i=0;i<k.length-1;i++){if(o[k[i]]===undefined)o[k[i]]={};o=o[k[i]]}o[k[k.length-1]]=e.type=="checkbox"?e.checked:e.value})}
+const ticks=(a,b,n)=>{const s=(b-a)/n,p=Math.pow(10,Math.floor(Math.log10(s))),f=s/p,t=(f<1.5?1:f<3?2:f<7?5:10)*p,o=[];for(let v=Math.ceil(a/t)*t;v<=b+1e-9;v+=t)o.push(+v.toPrecision(12));return o};
+function plot(o){const W=760,H=o.h||330,m={l:58,r:14,t:30,b:42};let X=[],Y=[];
+ o.lines.forEach(l=>l.p.forEach(q=>{X.push(q[0]);Y.push(q[1])}));(o.areas||[]).forEach(a=>a.p.forEach(q=>Y.push(q[1])));
+ let x0=Math.min(...X),x1=Math.max(...X),y0=Math.min(...Y),y1=Math.max(...Y);if(x1===x0)x1=x0+1;if(y1===y0)y1=y0+1;const pd=(y1-y0)*.06;y0-=pd;y1+=pd;
+ const sx=x=>m.l+(x-x0)/(x1-x0)*(W-m.l-m.r),sy=y=>H-m.b-(y-y0)/(y1-y0)*(H-m.t-m.b),pt=p=>p.map(q=>sx(q[0]).toFixed(1)+","+sy(q[1]).toFixed(1)).join(" ");
+ let s=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(o.yl)} versus distance">`;
+ ticks(x0,x1,8).forEach(v=>s+=`<line x1="${sx(v)}" x2="${sx(v)}" y1="${m.t}" y2="${H-m.b}" stroke="#27394a"/><text x="${sx(v)}" y="${H-m.b+15}" fill="#8aa1b2" font-size="11" text-anchor="middle">${v}</text>`);
+ ticks(y0,y1,6).forEach(v=>s+=`<line y1="${sy(v)}" y2="${sy(v)}" x1="${m.l}" x2="${W-m.r}" stroke="#27394a"/><text x="${m.l-6}" y="${sy(v)+4}" fill="#8aa1b2" font-size="11" text-anchor="end">${v}</text>`);
+ (o.areas||[]).forEach(a=>s+=`<polygon points="${pt(a.p)}" fill="#6d8296" fill-opacity=".25"/>`);
+ (o.vl||[]).forEach(v=>s+=`<line x1="${sx(v.x)}" x2="${sx(v.x)}" y1="${m.t}" y2="${H-m.b}" stroke="${v.c}" stroke-width="${v.w||1}" stroke-dasharray="${v.d||""}"/>`);
+ o.lines.forEach(l=>s+=`<polyline points="${pt(l.p)}" fill="none" stroke="${l.c}" stroke-width="${l.w||2}" stroke-dasharray="${l.d||""}"/>`);
+ s+=`<text x="${(m.l+W-m.r)/2}" y="${H-5}" fill="#d9e6ef" font-size="12" text-anchor="middle">${o.xl}</text><text transform="translate(13 ${(m.t+H-m.b)/2}) rotate(-90)" fill="#d9e6ef" font-size="12" text-anchor="middle">${o.yl}</text>`;
+ let lx=m.l;(o.leg||[]).forEach(l=>{s+=`<line x1="${lx}" x2="${lx+18}" y1="14" y2="14" stroke="${l[1]}" stroke-width="2" stroke-dasharray="${l[2]||""}"/><text x="${lx+22}" y="18" fill="#d9e6ef" font-size="11">${l[0]}</text>`;lx+=34+l[0].length*6});
+ return s+"</svg>"}
+const f3=v=>v.toFixed(3);
+function show(){
+ const r=res,L=[],ln=[],jv=r.jumps.filter(j=>j.status=="free").map(j=>({x:j.x,c:"var(--jump)",w:2})),bd=r.reaches.slice(0,-1).map(q=>({x:q.x1,c:"#6d8296",d:"4 3"}));
+ const rows=r.rows,lines=[{p:rows.map(w=>[w.x,w.wse]),c:"var(--water)",w:2.4}],areas=[],lg=[["Water surface","var(--water)"],["Bed","var(--bed)"],["Normal depth","var(--norm)","5 4"],["Critical depth","var(--crit)","2 3"]];
+ if(st.egl){lines.push({p:rows.map(w=>[w.x,w.egl]),c:"var(--egl)",w:1.4});lg.push(["EGL","var(--egl)"])}
+ const zmin=Math.min(...rows.map(w=>w.z));
+ r.reaches.forEach(q=>{const z1=q.z0-q.S0*(q.x1-q.x0);lines.push({p:[[q.x0,q.z0],[q.x1,z1]],c:"var(--bed)",w:2.5},{p:[[q.x0,q.z0+q.yc],[q.x1,z1+q.yc]],c:"var(--crit)",d:"2 3",w:1.3});
+  if(q.yn!==null)lines.push({p:[[q.x0,q.z0+q.yn],[q.x1,z1+q.yn]],c:"var(--norm)",d:"5 4",w:1.3});areas.push({p:[[q.x0,q.z0],[q.x1,z1],[q.x1,zmin-.3*(rows.length?1:0)],[q.x0,zmin-.3]]})});
+ if(jv.length)lg.push(["Jump","var(--jump)"]);
+ const f1=plot({xl:"Distance along channel (m)",yl:"Elevation (m)",lines,areas,vl:bd.concat(jv),leg:lg});
+ const f2=plot({xl:"Distance along channel (m)",yl:"Froude number",h:260,lines:[{p:rows.map(w=>[w.x,w.fr]),c:"var(--water)"},{p:[[rows[0].x,1],[rows[rows.length-1].x,1]],c:"#d9e6ef",d:"5 4",w:1}],vl:bd.concat(jv),leg:[["Froude number","var(--water)"],["Fr = 1","#d9e6ef","5 4"],["Jump","var(--jump)"]]});
+ let sm=r.reaches.map(q=>`<p><b>${q.name}:</b> ${q.slope_class} slope. Normal depth ${q.yn===null?"none (flat or adverse)":f3(q.yn)+" m"}, critical depth ${f3(q.yc)} m. Profiles: ${q.types.join(", ")||"-"}.</p>`).join("");
+ if(!r.jumps.length)sm+="<p><b>Hydraulic jump:</b> none.</p>";
+ r.jumps.forEach(j=>{sm+=j.status=="free"?`<p><b>Hydraulic jump</b> at x = ${j.x.toFixed(2)} m (${j.reach_name}): depth ${f3(j.y1)} m to ${f3(j.y2)} m (sequent depth). Fr₁ = ${j.fr1.toFixed(2)}, ${j.type} jump. Energy loss ${f3(j.loss)} m (${j.loss_pct.toFixed(1)}% of E₁). Length about ${j.length.toFixed(1)} m (approximate rule L = 6.1·y₂, check your textbook).</p>`:j.status=="drowned"?`<p><b>Drowned jump:</b> the tailwater (${f3(j.y_tail)} m) is above the sequent depth (${f3(j.y2)} m) needed for y₁ = ${f3(j.y1)} m, so the jump is pushed up to the upstream end.</p>`:`<p><b>Swept-out jump:</b> flow stays supercritical to the end (${f3(j.y1)} m). The tailwater (${f3(j.y_tail)} m) is below the sequent depth needed (${f3(j.y2)} m).</p>`});
+ const H=["Distance (m)","Reach","Bed elevation (m)","Depth (m)","Water surface elevation (m)","Velocity (m/s)","Froude number","Specific energy (m)","Friction slope","Energy grade line elevation (m)","Profile type","Flow","Note"],K=["x","reach","z","y","wse","v","fr","e","sf","egl","ptype","flow","note"];
+ const cell=(w,k)=>typeof w[k]=="number"&&k!="reach"?(k=="sf"?w[k].toExponential(3):w[k].toFixed(k=="x"?2:4)):w[k];
+ $("#out").innerHTML=`<section><h2>${esc(r.name)}</h2>${sm}${r.warnings.map(w=>`<p class="w">⚠ ${esc(w)}</p>`).join("")}</section><section><h2>Figure 1: longitudinal profile</h2>${f1}</section><section><h2>Figure 2: Froude number</h2>${f2}</section>
+ <section><h2>Station table</h2><div class="row" style="margin:0 0 .6rem"><button id="csv">Download CSV</button><span class="k">${rows.length} stations${rows.length>400?" (first 400 shown, the CSV has all)":""}</span></div><div class="tw"><table><thead><tr>${H.map(h=>`<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.slice(0,400).map(w=>`<tr>${K.map(k=>`<td>${esc(cell(w,k))}</td>`).join("")}</tr>`).join("")}</tbody></table></div></section>
+ <section><h2>Limitations</h2><p class="k">Steady, gradually varied, one-dimensional flow; prismatic reaches; no sediment, side inflow or local losses at section changes; the jump on a sloping bed uses the horizontal-floor momentum equation; jump length is an empirical estimate.</p></section>`;
+ $("#csv").onclick=()=>{const q=v=>/[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v,t=[H.join(",")].concat(rows.map(w=>K.map(k=>q(String(w[k]))).join(","))).join("\n"),a=document.createElement("a");a.href=URL.createObjectURL(new Blob([t],{type:"text/csv"}));a.download="stations.csv";a.click()}}
+function run(){read();try{res=GVF.compute(st);show()}catch(e){$("#out").innerHTML=`<section class="err"><h2>Please check the inputs</h2><p>${esc(e.friendly?e.message[0].toUpperCase()+e.message.slice(1):"Unexpected problem: "+e.message)}</p></section>`}}
+function load(i){cur=i;st=D(P[i]);st.egl=true;render();run()}
+document.addEventListener("change",e=>{if(e.target.id=="pre")return load(+e.target.value);if(e.target.tagName=="SELECT"){read();if(/type$/.test(e.target.dataset.p||"")){render();$("#pre").value=cur}}});
+document.addEventListener("click",e=>{const a=e.target.dataset.a;if(!a)return;read();if(a=="add"){const l=st.reaches[st.reaches.length-1];st.reaches.push(D(l));render()}else if(a.startsWith("del")){st.reaches.splice(+a.slice(3),1);render()}else run()});
+document.addEventListener("keydown",e=>{if(e.key=="Enter"&&e.target.matches("input[data-p]"))run()});
+load(0)})();
+</script></body></html>

@@ -1,0 +1,12 @@
+{
+  "name": "MY TEXTBOOK EXAMPLE (replace these numbers with your textbook problem)",
+  "discharge": 10.0,
+  "start_bed_elevation": 100.0,
+  "step": 10.0,
+  "tolerance": 1e-6,
+  "upstream": {"type": "normal"},
+  "downstream": {"type": "depth", "depth": 2.5},
+  "reaches": [
+    {"length": 2000, "slope": 0.001, "n": 0.015, "section": {"type": "rectangular", "width": 5}}
+  ]
+}

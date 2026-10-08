@@ -1,0 +1,8 @@
+Two reaches: changing slope and roughness   (Q = 15 m3/s)
+
+Reach 1: mild (M) slope | normal depth 1.812 m | critical depth 0.885 m | profiles: M1
+Reach 2: mild (M) slope | normal depth 1.994 m | critical depth 0.885 m | profiles: M1
+
+Hydraulic jump: none
+
+Self-checks: energy_residual = 3.60e-08, continuity = 1.78e-15, egl_rise = 0.00e+00

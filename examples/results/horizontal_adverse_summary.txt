@@ -1,0 +1,8 @@
+Horizontal then adverse slope ending in a free overfall (H2, A2)   (Q = 3 m3/s)
+
+Reach 1: horizontal (H) slope | normal depth none (no normal depth) | critical depth 0.467 m | profiles: H2
+Reach 2: adverse (A) slope | normal depth none (no normal depth) | critical depth 0.467 m | profiles: A2
+
+Hydraulic jump: none
+
+Self-checks: energy_residual = 1.71e-07, continuity = 4.44e-16, egl_rise = 5.67e-08

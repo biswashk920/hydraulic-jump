@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# Output written by the command line when you do not choose a folder
+# (anchored with a leading slash, so examples/results/ is NOT ignored)
+/results/
+
+# Editors and operating system
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

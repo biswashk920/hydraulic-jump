@@ -1,0 +1,12 @@
+{
+  "name": "Sluice gate then mild channel (jump inside the channel)",
+  "discharge": 12.0,
+  "start_bed_elevation": 100.0,
+  "step": 2.0,
+  "tolerance": 1e-6,
+  "upstream": {"type": "gate", "opening": 0.5, "cc": 0.61},
+  "downstream": {"type": "depth", "depth": 1.4},
+  "reaches": [
+    {"length": 300, "slope": 0.001, "n": 0.013, "section": {"type": "rectangular", "width": 5}}
+  ]
+}

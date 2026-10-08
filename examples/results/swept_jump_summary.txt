@@ -1,0 +1,7 @@
+Swept-out jump (tailwater too low)   (Q = 12 m3/s)
+
+Reach 1: mild (M) slope | normal depth 1.155 m | critical depth 0.837 m | profiles: M3
+
+Jump SWEPT OUT: flow stays supercritical to the end (0.699 m). The tailwater (0.950 m) is lower than the sequent depth needed (0.993 m).
+
+Self-checks: energy_residual = 1.47e-06, continuity = 1.78e-15, egl_rise = 0.00e+00

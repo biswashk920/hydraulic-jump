@@ -1,0 +1,13 @@
+Steep to mild: jump forms in the mild reach   (Q = 8 m3/s)
+
+Reach 1: steep (S) slope | normal depth 0.274 m | critical depth 0.742 m | profiles: S2, uniform
+Reach 2: mild (M) slope | normal depth 1.490 m | critical depth 0.742 m | profiles: M3, uniform
+
+Hydraulic jump at x = 307.28 m (Reach 2): 0.305 m -> 1.490 m, Fr1 = 3.80 (oscillating), energy loss 0.917 m (36.7% of E1), length ~ 9.1 m (approximate)
+Note: Jump length L = 6.1 * y2 is an approximate empirical rule of thumb (commonly quoted for Fr1 above about 4.5); check it against your textbook.
+
+Self-checks: energy_residual = 2.90e-06, continuity = 8.88e-16, egl_rise = 6.11e-07
+
+Warnings:
+  - The jump (length ~ 9.1 m) is close to the junction between reach 1 and reach 2; the jump equations assume one uniform section.
+  - Step size may be too coarse: depth changes by 14% in one step near x = 5.0 m. Use a smaller step.

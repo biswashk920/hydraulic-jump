@@ -1,0 +1,9 @@
+Circular culvert: steep pipe into a mild pipe (jump)   (Q = 1.6 m3/s)
+
+Reach 1: steep (S) slope | normal depth 0.398 m | critical depth 0.693 m | profiles: S2
+Reach 2: mild (M) slope | normal depth 0.905 m | critical depth 0.693 m | profiles: M3, uniform
+
+Hydraulic jump at x = 88.09 m (Reach 2): 0.522 m -> 0.905 m, Fr1 = 1.72 (weak), energy loss 0.046 m (4.2% of E1), length ~ 5.5 m (approximate)
+Note: Jump length L = 6.1 * y2 is an approximate empirical rule of thumb (commonly quoted for Fr1 above about 4.5); check it against your textbook.
+
+Self-checks: energy_residual = 1.32e-06, continuity = 2.22e-16, egl_rise = 1.41e-09

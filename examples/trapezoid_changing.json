@@ -1,0 +1,12 @@
+{
+  "name": "Two reaches: changing slope and roughness",
+  "discharge": 15.0,
+  "start_bed_elevation": 200.0,
+  "step": 25.0,
+  "upstream": {"type": "normal"},
+  "downstream": {"type": "depth", "depth": 2.4},
+  "reaches": [
+    {"length": 1500, "slope": 0.0008, "n": 0.030, "section": {"type": "trapezoidal", "width": 5, "side_slope": 1.5}},
+    {"length": 1500, "slope": 0.0003, "n": 0.022, "section": {"type": "trapezoidal", "width": 5, "side_slope": 1.5}}
+  ]
+}

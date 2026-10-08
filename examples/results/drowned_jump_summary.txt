@@ -1,0 +1,7 @@
+Drowned jump (tailwater too high)   (Q = 12 m3/s)
+
+Reach 1: mild (M) slope | normal depth 1.155 m | critical depth 0.837 m | profiles: M1
+
+Jump DROWNED: the tailwater (2.416 m at the upstream end) is higher than the sequent depth (1.816 m) needed for y1 = 0.305 m, so the jump is pushed up to the upstream end (gate).
+
+Self-checks: energy_residual = 6.22e-10, continuity = 0.00e+00, egl_rise = 0.00e+00
