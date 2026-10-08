@@ -108,11 +108,6 @@ A **CSV** file may hold the reaches table (columns `length,slope,n,section,width
 
 Steady, gradually varied, one-dimensional flow only. Prismatic reaches (one section per reach). No sediment, no side inflow, no local losses at junctions (no choking or constriction control at section changes). A jump on a sloping bed uses the horizontal-floor momentum equation. Jump length is empirical. Circular pipes are limited to 99 % of the diameter (no pressurised flow). Critical-slope reaches are treated like steep reaches for control purposes. Near Fr = 1 the method is sensitive and the program warns.
 
-## Publishing the web version (GitHub Pages)
-
-Put the repository on GitHub, then Settings > Pages > Source: *Deploy from a branch*, Branch: `main`, Folder: `/docs`. The link appears after a minute or two. Replace `YOUR-USERNAME` and `YOUR-REPO` at the top of this file.
-
-To try it on your own computer: `cd docs`, `python -m http.server 8000`, then open http://localhost:8000.
 
 ## Layout
 
@@ -124,4 +119,4 @@ To try it on your own computer: `cd docs`, `python -m http.server 8000`, then op
 
 ## License
 
-MIT, see `LICENSE`. Replace `YOUR NAME` in the license file.
+MIT, see `LICENSE`.
