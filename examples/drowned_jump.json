@@ -1,0 +1,11 @@
+{
+  "name": "Drowned jump (tailwater too high)",
+  "discharge": 12.0,
+  "start_bed_elevation": 100.0,
+  "step": 5.0,
+  "upstream": {"type": "gate", "opening": 0.5},
+  "downstream": {"type": "depth", "depth": 2.6},
+  "reaches": [
+    {"length": 200, "slope": 0.001, "n": 0.013, "section": {"type": "rectangular", "width": 5}}
+  ]
+}

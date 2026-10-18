@@ -1,0 +1,11 @@
+Gate, then jump, then uniform flow at normal depth   (Q = 12 m3/s)
+
+Reach 1: mild (M) slope | normal depth 1.762 m | critical depth 0.837 m | profiles: M3, jump, uniform
+
+Hydraulic jump (oscillating, Fr1 = 4.23) in Reach 1:
+  toe at x = 44.51 m with y1 = 0.320 m; sequent depth y2 = 1.762 m
+  roller length ~ 10.7 m (approximate), so the jump ends near x = 55.26 m where the depth is 1.762 m
+  energy loss 1.329 m (41.7% of E1 = 3.186 m)
+Note: Jump length L = 6.1 * y2 is an approximate empirical rule of thumb (commonly quoted for Fr1 above about 4.5); check it against your textbook.
+
+Self-checks: energy_residual = 1.23e-05, continuity = 1.78e-15, egl_rise = 0.00e+00

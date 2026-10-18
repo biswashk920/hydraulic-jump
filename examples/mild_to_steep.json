@@ -1,0 +1,12 @@
+{
+  "name": "Mild to steep break (critical depth at the break)",
+  "discharge": 8.0,
+  "start_bed_elevation": 100.0,
+  "step": 10.0,
+  "upstream": {"type": "normal"},
+  "downstream": {"type": "normal"},
+  "reaches": [
+    {"length": 600, "slope": 0.0005, "n": 0.015, "section": {"type": "rectangular", "width": 4}},
+    {"length": 600, "slope": 0.02,   "n": 0.015, "section": {"type": "rectangular", "width": 4}}
+  ]
+}

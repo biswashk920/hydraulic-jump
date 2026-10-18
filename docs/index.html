@@ -1,0 +1,517 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Hydraulic Jump and Gradually Varied Flow Profiler</title>
+<style>
+:root{color-scheme:dark;--bg:#0e1923;--pan:#15232f;--ln:#27394a;--tx:#d9e6ef;--mut:#8aa1b2;--water:#52c3e6;--egl:#e8c36a;--crit:#ef7d73;--norm:#7fcf9b;--jump:#f0a35e;--bed:#6d8296}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--tx);font:15px/1.5 "Segoe UI",system-ui,sans-serif}
+h1,h2{font-family:"Palatino Linotype",Palatino,Georgia,serif;font-weight:600;margin:0}
+h1{font-size:1.5rem}h2{font-size:1.1rem;margin-bottom:.5rem}
+header{padding:1rem 1.2rem;border-bottom:1px solid var(--ln)}header p{margin:.2rem 0 0;color:var(--mut);max-width:70ch}
+#out{min-width:0}main{display:grid;gap:1rem;padding:1rem 1.2rem;max-width:1400px;margin:auto}
+@media(min-width:960px){main{grid-template-columns:minmax(330px,420px) minmax(0,1fr);align-items:start}#form{position:sticky;top:.5rem;max-height:calc(100vh - 1rem);overflow:auto}}
+section,#form{background:var(--pan);border:1px solid var(--ln);border-radius:8px;padding:1rem;margin-bottom:1rem}
+.g{display:grid;grid-template-columns:1fr 1fr;gap:.6rem}label{display:block;font-weight:600;font-size:.9rem}
+label small{display:block;font-weight:400;color:var(--mut);font-size:.78rem;line-height:1.3;margin-top:.15rem}
+input,select,button{font:inherit;color:var(--tx);background:#0b141c;border:1px solid var(--ln);border-radius:6px;padding:.4rem .5rem;width:100%}
+button{cursor:pointer;width:auto;background:#1c3345}button.p{background:var(--water);color:#06202b;font-weight:700;border:0}
+:focus-visible{outline:2px solid var(--water);outline-offset:1px}
+fieldset{border:1px solid var(--ln);border-radius:6px;margin:.8rem 0;padding:.6rem}legend{font-weight:600;padding:0 .3rem}
+.row{display:flex;gap:.5rem;flex-wrap:wrap;margin-top:.6rem}.err{border-color:var(--crit);color:#ffd5d0}
+.w{color:var(--jump);font-size:.88rem;margin:.2rem 0}svg{width:100%;height:auto;display:block}
+.tw{overflow:auto;max-height:340px}table{border-collapse:collapse;font-size:.8rem;white-space:nowrap}
+th,td{padding:.2rem .5rem;border-bottom:1px solid var(--ln);text-align:right}th{position:sticky;top:0;background:#1c3345}
+canvas{width:100%;height:440px;display:block;background:#0b141c;border:1px solid var(--ln);border-radius:6px;touch-action:none;cursor:grab}@media(max-width:600px){canvas{height:320px}}input[type=range]{padding:0;accent-color:#52c3e6}
+canvas{width:100%;height:480px;display:block;background:#0b141c;border:1px solid var(--ln);border-radius:6px}@media(max-width:600px){canvas{height:340px}}input[type=range]{padding:0;accent-color:#52c3e6}.cb{display:flex;gap:.35rem;align-items:center;width:auto;font-weight:400;font-size:.85rem}.cb input{width:auto}
+dl{margin:0}dt{font-weight:600;margin-top:.5rem}dd{margin:0;color:var(--mut)}.k{color:var(--mut)}
+</style></head><body>
+<header><h1>Hydraulic Jump and Gradually Varied Flow Profiler</h1>
+<p>Water surface profiles in open channels (standard step method), profile types, Froude number and hydraulic jump location. Runs entirely in your browser.</p></header>
+<main><div id="form"></div><div id="out"></div></main>
+<script id="core">
+(function(root){
+"use strict";
+const G=9.81,LEN=6.1;
+function ERR(m){const e=new Error(m);e.friendly=true;return e}
+function num(v,n,pos,z0){if(v===""||v===null||v===undefined||!isFinite(Number(v)))throw ERR(n+" must be a number.");v=Number(v);if(pos&&(v<0||(v===0&&!z0)))throw ERR(n+" must be greater than zero (you gave "+v+").");return v}
+function mkSec(d){
+ if(!d||!d.type)throw ERR("each reach needs a section type.");
+ const t=String(d.type).toLowerCase();
+ if(t.startsWith("rect")){const b=num(d.width,"Rectangular channel width",1);return{kind:"rectangular",ymax:Infinity,b,area:y=>b*y,top:y=>b,perim:y=>b+2*y,mom:y=>b*y*y/2}}
+ if(t.startsWith("trap")){const b=num(d.width||0,"Trapezoid bottom width",1,1),z=num(d.side_slope||0,"Trapezoid side slope",1,1);if(b===0&&z===0)throw ERR("A trapezoid needs a bottom width or a side slope (both are zero).");const k=Math.sqrt(1+z*z);return{kind:"trapezoidal",b,z,ymax:Infinity,area:y=>(b+z*y)*y,top:y=>b+2*z*y,perim:y=>b+2*y*k,mom:y=>b*y*y/2+z*y*y*y/3}}
+ if(t.startsWith("circ")){const D=num(d.diameter,"Circular diameter",1),r=D/2,ph=y=>Math.acos(Math.max(-1,Math.min(1,1-2*Math.min(Math.max(y,1e-12),D)/D)));
+  return{kind:"circular",D,ymax:.99*D,area:y=>{const p=ph(y);return r*r*(p-Math.sin(p)*Math.cos(p))},top:y=>2*r*Math.sin(ph(y)),perim:y=>2*r*ph(y),mom:y=>{const p=ph(y),a=Math.sin(p),c=Math.cos(p);return 2/3*r*r*r*a*a*a-r*r*r*c*(p-a*c)}}}
+ throw ERR("unknown section type '"+d.type+"'. Use rectangular, trapezoidal or circular.")}
+function brent(f,a,b,tol){let fa=f(a),fb=f(b);if(fa===0)return a;if(fb===0)return b;if(fa*fb>0)throw ERR("internal error: root not bracketed.");
+ let c=a,fc=fa,d=b-a,e=d;
+ for(let i=0;i<200;i++){
+  if((fb>0&&fc>0)||(fb<0&&fc<0)){c=a;fc=fa;d=b-a;e=d}
+  if(Math.abs(fc)<Math.abs(fb)){a=b;b=c;c=a;fa=fb;fb=fc;fc=fa}
+  const t1=2*2.2e-16*Math.abs(b)+.5*tol,xm=.5*(c-b);
+  if(Math.abs(xm)<=t1||fb===0)return b;
+  if(Math.abs(e)>=t1&&Math.abs(fa)>Math.abs(fb)){let s=fb/fa,p,q;
+   if(a===c){p=2*xm*s;q=1-s}else{const qq=fa/fc,r=fb/fc;p=s*(2*xm*qq*(qq-r)-(b-a)*(r-1));q=(qq-1)*(r-1)*(s-1)}
+   if(p>0)q=-q;p=Math.abs(p);
+   if(2*p<Math.min(3*xm*q-Math.abs(t1*q),Math.abs(e*q))){e=d;d=p/q}else{d=xm;e=d}
+  }else{d=xm;e=d}
+  a=b;fa=fb;b+=Math.abs(d)>t1?d:(xm>0?t1:-t1);fb=f(b)}
+ return b}
+const fr=(s,Q,y)=>{const A=s.area(y);return Q/(A*Math.sqrt(G*A/s.top(y)))};
+const en=(s,Q,y)=>{const A=s.area(y);return y+Q*Q/(2*G*A*A)};
+const sfn=(s,n,Q,y)=>{const A=s.area(y),R=A/s.perim(y);return Math.pow(n*Q/(A*Math.pow(R,2/3)),2)};
+const mo=(s,Q,y)=>Q*Q/(G*s.area(y))+s.mom(y);
+const cap=(s,n,S,y)=>{const A=s.area(y);return Math.sqrt(S)/n*A*Math.pow(A/s.perim(y),2/3)};
+function gmax(f,a,b){const g=(Math.sqrt(5)-1)/2;let c=b-g*(b-a),d=a+g*(b-a);for(let i=0;i<80;i++){if(f(c)>f(d))b=d;else a=c;c=b-g*(b-a);d=a+g*(b-a)}return(a+b)/2}
+function normalDepth(s,Q,n,S){
+ if(S<=0)return null;
+ if(s.kind==="circular"){const yp=gmax(y=>cap(s,n,S,y),.5*s.D,s.D),qm=cap(s,n,S,yp);
+  if(Q>qm*(1+1e-9))throw ERR("this circular pipe cannot carry "+Q+" m3/s flowing partly full at this slope (maximum is about "+qm.toPrecision(3)+" m3/s). Use a larger diameter, a steeper slope or a smaller Q.");
+  return brent(y=>cap(s,n,S,y)-Q,1e-9*s.D,yp,1e-12)}
+ let hi=1;while(cap(s,n,S,hi)<Q){hi*=2;if(hi>1e6)throw ERR("no normal depth found (the discharge is far too large for this channel).")}
+ return brent(y=>cap(s,n,S,y)-Q,1e-9,hi,1e-12)}
+function critDepth(s,Q){const f=y=>Q*Q*s.top(y)/(G*Math.pow(s.area(y),3))-1;
+ if(s.kind==="circular"){if(f(s.ymax)>0)throw ERR("critical depth would be above 99% of the pipe diameter: the pipe is too small for this discharge.");return brent(f,1e-9*s.D,s.ymax,1e-12)}
+ let hi=1;while(f(hi)>0){hi*=2;if(hi>1e6)throw ERR("no critical depth found (the discharge is far too large for this channel).")}
+ return brent(f,1e-9,hi,1e-12)}
+function sequent(s,Q,y1,yc){
+ if(y1>yc*(1+1e-9))throw ERR("a hydraulic jump needs supercritical flow (depth below critical depth).");
+ if(y1>=yc*(1-1e-7))return yc;
+ const M1=mo(s,Q,y1),f=y=>mo(s,Q,y)-M1;let lo=yc,hi=Math.max(2*yc,2*y1);const cp=s.ymax;
+ while(f(Math.min(hi,cp))<0){if(hi>=cp)return null;lo=hi;hi*=2}
+ return brent(f,lo,Math.min(hi,cp),1e-12)}
+function alt(s,Q,y,yc){if(Math.abs(y-yc)<=1e-9*yc)return yc;const E=en(s,Q,y),f=t=>en(s,Q,t)-E;
+ if(y>yc){let lo=.5*yc;while(f(lo)<0){lo*=.5;if(lo<1e-12)return null}return brent(f,lo,yc,1e-12)}
+ let hi=Math.max(1.5*yc,2*y);const cp=s.ymax;while(f(Math.min(hi,cp))<0){if(hi>=cp)return null;hi*=1.6}return brent(f,yc,Math.min(hi,cp),1e-12)}
+function conj(s,Q,y,yc){if(y<yc)return sequent(s,Q,y,yc);if(Math.abs(y-yc)<=1e-9*yc)return yc;const M=mo(s,Q,y),f=t=>mo(s,Q,t)-M;let lo=.5*yc;while(f(lo)<0){lo*=.5;if(lo<1e-12)return null}return brent(f,lo,yc,1e-12)}
+const JC=[[1.7,"undular"],[2.5,"weak"],[4.5,"oscillating"],[9,"steady"],[Infinity,"strong"]];
+const jtype=f=>JC.find(c=>f<c[0])[1];
+function solveStep(cx,pa,ya,pb,sup){
+ const Q=cx.Q,ra=cx.R[pa[2]],rb=cx.R[pb[2]],L=Math.abs(pb[0]-pa[0]),d=pb[0]>pa[0]?1:-1,Aa=ra.sec.area(ya);
+ const Ha=pa[1]+ya+Q*Q/(2*G*Aa*Aa),Sa=sfn(ra.sec,ra.n,Q,ya),sec=rb.sec,zb=pb[1],n=rb.n;
+ const F=y=>{const A=sec.area(y);return zb+y+Q*Q/(2*G*A*A)+d*.5*(Sa+sfn(sec,n,Q,y))*L-Ha};
+ const yc=rb.yc,Fc=F(yc);
+ if(Math.abs(Fc)<=1e-9)return yc;if(Fc>0)return null;
+ let lo,hi;
+ if(sup){hi=yc;lo=yc*.9;while(F(lo)<0){hi=lo;lo*=.5;if(lo<1e-9)return null}}
+ else{lo=yc;hi=yc*1.1;const cp=sec.ymax;while(F(Math.min(hi,cp))<0){if(hi>=cp||hi>1e6)return null;lo=hi;hi*=1.6}hi=Math.min(hi,cp)}
+ return brent(F,lo,hi,cx.tol)}
+function tryStep(cx,i,y,j,sup){
+ const pa=[cx.xs[i],cx.zs[i],cx.rs[i]],pb=[cx.xs[j],cx.zs[j],cx.rs[j]],r=solveStep(cx,pa,y,pb,sup);
+ if(r!==null||pa[0]===pb[0])return[r,false];
+ for(let k=1;k<8;k++){const n=Math.pow(2,k);let yy=y,p=pa,ok=true;
+  for(let s=1;s<=n;s++){const t=s/n,q=[pa[0]+(pb[0]-pa[0])*t,pa[1]+(pb[1]-pa[1])*t,pb[2]];yy=solveStep(cx,p,yy,q,sup);if(yy===null){ok=false;break}p=q}
+  if(ok)return[yy,true]}
+ return[null,false]}
+function sweep(cx,i0,y0,dir,sup){const ys={};ys[i0]=y0;const fine=[];let i=i0,y=y0;const N=cx.xs.length;
+ while(i+dir>=0&&i+dir<N){const j=i+dir,[r,sb]=tryStep(cx,i,y,j,sup);if(r===null)break;if(sb)fine.push(j);ys[j]=y=r;i=j}
+ return{ys,fine}}
+function classify(r,y,flow){const yn=r.yn,yc=r.yc,c=r.cls;
+ if((c==="M"||c==="S")&&Math.abs(y-yn)<=.01*yn)return"uniform";
+ const a=flow==="subcritical"?y>=yc*(1-1e-6):y>yc*(1+1e-6);
+ if(c==="M")return y>yn?"M1":a?"M2":"M3";
+ if(c==="S")return a?"S1":y>yn?"S2":"S3";
+ if(c==="C")return a?"C1":"C3";
+ return c+(a?2:3)}
+const UPT=["normal","depth","level","gate","critical","none"],DNT=["normal","depth","level","weir","overfall","none"];
+function bcDepth(bc,side,R,Q){
+ const up=side==="upstream",r=up?R[0]:R[R.length-1];bc=bc||{type:"normal"};const t=String(bc.type||"normal").toLowerCase();
+ if((up?UPT:DNT).indexOf(t)<0)throw ERR("the "+side+" condition '"+t+"' is not available.");
+ const w="the "+side+" condition";
+ if(t==="none")return[null,t];
+ if(t==="normal"){if(r.yn===null)throw ERR("the "+side+" reach has a "+(r.S0===0?"horizontal":"adverse")+" slope, so it has no normal depth. Choose another "+side+" condition (for example a depth).");return[r.yn,t]}
+ if(t==="critical"||t==="overfall")return[r.yc,t];
+ if(t==="depth")return[num(bc.depth,w+": depth",1),t];
+ if(t==="level"){const l=num(bc.level,w+": water surface elevation"),zb=up?r.z0:r.z0-r.S0*r.L;if(l-zb<=0)throw ERR("the "+w+" water level ("+l+" m) is not above the channel bed ("+zb.toFixed(3)+" m).");return[l-zb,t]}
+ if(t==="gate")return[num(bc.cc??.61,w+": contraction coefficient",1)*num(bc.opening,w+": gate opening",1),t];
+ if(t==="weir"){if(r.sec.kind!=="rectangular")throw ERR("the weir option works only for a rectangular last reach. For other sections, enter the tailwater depth directly.");
+  const cr=num(bc.crest,w+": weir crest height",1,1),cw=num(bc.cw??1.7,w+": weir coefficient",1);return[cr+Math.pow(Q/(cw*r.sec.b),2/3),t]}}
+function compute(spec){
+ if(!spec||typeof spec!=="object")throw ERR("the channel description is missing.");
+ const Q=num(spec.discharge,"Discharge Q",1),zs0=num(spec.start_bed_elevation??100,"Starting bed elevation"),step=num(spec.step??1,"Step size",1),tol=num(spec.tolerance??1e-6,"Tolerance",1);
+ const RL=spec.reaches;if(!Array.isArray(RL)||!RL.length)throw ERR("add at least one reach to the channel.");
+ const res={name:String(spec.name||"channel"),Q,warnings:[],jumps:[],reaches:[],rows:[]},W=res.warnings,R=[];
+ let x0=0,z0=zs0;
+ RL.forEach((rd,k)=>{const tag="Reach "+(k+1),r={idx:k,name:tag};
+  r.L=num(rd.length,tag+": length",1);r.S0=num(rd.slope,tag+": bed slope");r.n=num(rd.n??.015,tag+": Manning's n",1);
+  try{r.sec=mkSec(rd.section);r.yc=critDepth(r.sec,Q);r.yn=normalDepth(r.sec,Q,r.n,r.S0)}catch(e){if(e.friendly)e.message=tag+": "+e.message;throw e}
+  if(r.S0<=0){r.kind="sub";r.cls=r.S0===0?"H":"A"}
+  else{const rel=(r.yn-r.yc)/r.yc;if(rel>.01){r.kind="sub";r.cls="M"}else if(rel<-.01){r.kind="sup";r.cls="S"}else{r.kind="crit";r.cls="C"}}
+  r.x0=x0;r.z0=z0;R.push(r);x0+=r.L;z0-=r.S0*r.L});
+ const m=R.length,xs=[],rs=[],zs=[],first=[],last=[];
+ const cnt=R.map(r=>Math.max(20,Math.ceil(r.L/step-1e-9))),tot=cnt.reduce((a,c)=>a+c+1,0);
+ if(tot>20000)throw ERR("that would need "+tot+" stations. Increase the step size (limit 20000 stations).");
+ R.forEach((r,q)=>{const ns=cnt[q];first[q]=xs.length;for(let k=0;k<=ns;k++){const x=r.x0+r.L*k/ns;xs.push(x);rs.push(q);zs.push(r.z0-r.S0*(x-r.x0))}last[q]=xs.length-1});
+ const N=xs.length,cx={Q,R,xs,rs,zs,tol},seeds=[],ctrl=new Set();
+ const[yu,tu]=bcDepth(spec.upstream,"upstream",R,Q),[yd,td]=bcDepth(spec.downstream,"downstream",R,Q),r0=R[0],rl=R[m-1];
+ if(yu===null){}
+ else if(tu==="normal"?yu<r0.yc*(1-1e-6):yu<=r0.yc*(1+1e-6))seeds.push([0,Math.min(yu,r0.yc),true]);
+ else if(tu!=="normal"&&tu!=="critical")W.push("The upstream "+tu+" gives a subcritical depth ("+yu.toFixed(3)+" m). Subcritical flow is controlled from downstream, so this upstream condition has no effect and was ignored.");
+ if(yd===null){}
+ else if(yd>=rl.yc*(1-1e-6))seeds.push([N-1,Math.max(yd,rl.yc),false]);
+ else if(td!=="normal"){
+  if(rl.kind!=="sub")W.push("The downstream depth ("+yd.toFixed(3)+" m) is below critical depth ("+rl.yc.toFixed(3)+" m). Supercritical flow cannot be affected from downstream, so it was ignored.");
+  else{const yf=rl.yn!==null?rl.yn:rl.yc;W.push("The downstream depth ("+yd.toFixed(3)+" m) is below critical depth ("+rl.yc.toFixed(3)+" m) in a reach whose flow should be subcritical. It was replaced by "+(rl.yn!==null?"normal":"critical")+" depth ("+yf.toFixed(3)+" m).");seeds.push([N-1,yf,false])}}
+ const rank={sub:0,crit:1,sup:2};
+ for(let k=0;k<m-1;k++)if(rank[R[k].kind]<rank[R[k+1].kind]){const i=first[k+1];ctrl.add(i);seeds.push([i,R[k+1].yc,true],[i,R[k+1].yc,false])}
+ const sup=Array(N).fill(null),sub=Array(N).fill(null),fine=new Set();
+ for(const[i,y,isSup]of seeds){const s=sweep(cx,i,y,isSup?1:-1,isSup),arr=isSup?sup:sub;s.fine.forEach(f=>fine.add(f));
+  for(const k in s.ys){const j=+k,v=s.ys[k];if(arr[j]===null||(isSup&&v<arr[j])||(!isSup&&v>arr[j]))arr[j]=v}}
+ const M=(i,y)=>mo(R[rs[i]].sec,Q,y);
+ function locate(i,forced){
+  const a=i-1,b=i,ra=rs[a],rb=rs[b];let x,ri,y1;
+  if(forced){x=xs[a];ri=ra;y1=sup[a];W.push("The supercritical profile reaches critical depth near x = "+x.toFixed(1)+" m; the jump position there is approximate.")}
+  else if(ra===rb&&xs[b]>xs[a]&&sub[b]!==null){
+   const rr=R[ra],sec=rr.sec,pa=[xs[a],zs[a],ra],pb=[xs[b],zs[b],rb],at=t=>[t,rr.z0-rr.S0*(t-rr.x0),ra];
+   const y1f=t=>solveStep(cx,pa,sup[a],at(t),true),y2f=t=>solveStep(cx,pb,sub[b],at(t),false);
+   const g=t=>{const u=y1f(t),w=y2f(t);return u===null||w===null?null:mo(sec,Q,u)-mo(sec,Q,w)};
+   const ga=g(xs[a]),gb=g(xs[b]);x=xs[b];
+   if(ga!==null&&gb!==null&&ga>0&&gb<=0)x=brent(t=>{const v=g(t);return v===null?-1:v},xs[a],xs[b],1e-9);
+   y1=y1f(x);ri=ra;if(y1===null){x=xs[b];y1=sup[b]}}
+  else{x=xs[b];ri=rb;y1=sup[b]}
+  const r=R[ri];y1=Math.min(y1,r.yc*(1-1e-9));let y2=sequent(r.sec,Q,y1,r.yc);
+  if(y2===null){y2=r.sec.ymax;W.push("The jump would fill the pipe (pressurised flow); this is not modelled.")}
+  return{status:"free",x,reach:ri,y1,y2}}
+ const yf=Array(N).fill(NaN),state=Array(N).fill(null),jb={},undef=[];let st=null;
+ for(let i=0;i<N;i++){const su=sup[i],sb=sub[i];
+  if(i===0){
+   if(su!==null&&sb!==null&&M(0,su)<=M(0,sb)*(1+1e-10)){st="sub";const y2=sequent(R[0].sec,Q,su,R[0].yc);res.jumps.push({status:"drowned",x:0,reach:0,y1:su,y2:y2||sb,y_tail:sb})}
+   else if(su!==null)st="sup";else if(sb!==null)st="sub"}
+  else if(ctrl.has(i)&&su!==null){st="sup"}
+  else if(st==="sup"){
+   if(su===null||(sb!==null&&M(i,su)<=M(i,sb)*(1+1e-10))){if(sb===null)undef.push(xs[i]);else{jb[i]=locate(i,su===null);st="sub"}}}
+  else if(st==="sub"){if(sb===null&&su!==null){W.push("Near x = "+xs[i].toFixed(1)+" m the subcritical profile reaches critical depth going upstream; the profile continues as supercritical flow.");st="sup"}}
+  else if(st===null)st=su!==null?"sup":sb!==null?"sub":null;
+  state[i]=st;const v=st==="sup"?su:st==="sub"?sb:null;
+  if(v===null&&st!==null)undef.push(xs[i]);else yf[i]=v===null?NaN:v}
+ if(undef.length)W.push("The profile could not be computed between x = "+Math.min(...undef).toFixed(1)+" m and "+Math.max(...undef).toFixed(1)+" m: the flow would have to pass through critical depth in a way this method cannot represent (for example choking, or a profile that reaches critical depth upstream of a control).");
+ if(state[N-1]==="sup"&&sub[N-1]!==null){const y1e=yf[N-1],y2=sequent(rl.sec,Q,Math.min(y1e,rl.yc*(1-1e-9)),rl.yc);res.jumps.push({status:"swept",x:xs[N-1],reach:m-1,y1:y1e,y2:y2||rl.sec.ymax,y_tail:sub[N-1]})}
+ res.curves={sup:[],sub:[]};for(let i=0;i<N;i++){if(sup[i]!==null)res.curves.sup.push([xs[i],sup[i]]);if(sub[i]!==null)res.curves.sub.push([xs[i],sub[i]])}
+ const rows=res.rows,RS=12,sm=s=>s*s*(3-2*s);let seg=0,skipX=-Infinity;
+ const row=(x,ri,y,flow,note,sg,e,sfv,pt)=>{const r=R[ri],s=r.sec,z=r.z0-r.S0*(x-r.x0),v=Q/s.area(y),ee=e===undefined?y+v*v/(2*G):e;return{x,reach:ri+1,z,y,wse:z+y,v,fr:fr(s,Q,y),e:ee,sf:sfv===undefined?sfn(s,r.n,Q,y):sfv,egl:z+ee,ptype:pt||classify(r,y,flow),flow,note,seg:sg,_r:ri,_ctl:false,_fine:false}};
+ for(let i=0;i<N;i++){
+  if(jb[i]){const j=jb[i],ri=j.reach,r=R[ri],Lj=LEN*j.y2,xe=Math.min(j.x+Lj,r.x0+r.L);
+   if(xe<j.x+Lj-1e-9)W.push("The jump (length ~ "+Lj.toFixed(1)+" m) would run past the end of "+r.name+"; the roller is drawn only to the end of the reach.");
+   let k=-1;for(let q=i;q<N;q++)if(rs[q]===ri&&xs[q]>=xe-1e-9&&sub[q]!==null){k=q;break}
+   let ye=j.y2;if(k>=0){ye=sub[k];if(Math.abs(xs[k]-xe)>=1e-9){const v=solveStep(cx,[xs[k],zs[k],rs[k]],sub[k],[xe,r.z0-r.S0*(xe-r.x0),ri],false);if(v!==null)ye=v}}
+   const e1=en(r.sec,Q,j.y1),e2=en(r.sec,Q,ye);
+   rows.push(row(j.x,ri,j.y1,"supercritical","jump toe (start of roller)",seg));seg++;
+   for(let q=1;q<=RS;q++){const s=q/RS,last=q===RS;rows.push(row(j.x+s*(xe-j.x),ri,j.y1+(ye-j.y1)*sm(s),last?"subcritical":"jump (transition)",last?"end of roller":"jump roller (idealised shape)",seg,e1+(e2-e1)*sm(s),last?undefined:NaN,last?undefined:"jump"))}
+   seg++;j.x_end=xe;j.y_end=ye;res.jumps.push(j);skipX=xe}
+  if(isNaN(yf[i])||xs[i]<skipX-1e-9)continue;
+  const r=rs[i];let note="";
+  if(i===first[r]&&r>0)note="start of reach "+(r+1);else if(i===last[r]&&r<m-1)note="end of reach "+(r+1);
+  if(ctrl.has(i))note=(note?note+"; ":"")+"critical depth control";
+  const rw=row(xs[i],r,yf[i],state[i]==="sup"?"supercritical":"subcritical",note,seg);
+  rw._ctl=ctrl.has(i)||(i===0&&tu==="critical")||(i===N-1&&td==="overfall");rw._fine=fine.has(i);rows.push(rw)}
+ for(const j of res.jumps){const r=R[j.reach];j.reach_name=r.name;const y1=Math.min(j.y1,r.yc*(1-1e-9)),e1=en(r.sec,Q,y1),e2=en(r.sec,Q,j.y2),f1=fr(r.sec,Q,y1);
+  Object.assign(j,{fr1:f1,fr2:fr(r.sec,Q,j.y2),type:jtype(f1),e1,e2,loss:e1-e2,loss_pct:100*(e1-e2)/e1,length:LEN*j.y2});
+  }
+ if(rows.length){
+  const f=rows.filter(r=>r.fr>.95&&r.fr<1.05&&!r._ctl&&r.flow!=="jump (transition)");
+  if(f.length)W.push("Froude number is within 5% of 1 at "+f.length+" station(s) (x = "+f[0].x.toFixed(1)+" to "+f[f.length-1].x.toFixed(1)+" m). Results near critical depth are very sensitive; an undular jump or waves may occur in reality.");
+  let wd=0,wx=0;for(let k=0;k<rows.length-1;k++){const a=rows[k],b=rows[k+1];if(a.seg===b.seg&&a._r===b._r&&b.x>a.x&&!(a._ctl||b._ctl)&&(a.note+b.note).indexOf("jump")<0&&a.flow!=="jump (transition)"){const d=Math.abs(b.y-a.y)/Math.max(a.y,b.y);if(d>wd){wd=d;wx=a.x}}}
+  const nf=rows.filter(r=>r._fine).length;
+  if(nf)W.push("The step size was too coarse at "+nf+" station(s) near critical depth; the solver used smaller internal sub-steps there. Use a smaller step for a cleaner profile.");
+  if(wd>.10)W.push("Step size may be too coarse: depth changes by "+Math.round(100*wd)+"% in one step near x = "+wx.toFixed(1)+" m. Use a smaller step.")}
+ R.forEach(r=>{if(r.sec.kind==="circular"){if(r.yn!==null&&cap(r.sec,r.n,r.S0,r.sec.D)<Q)W.push(r.name+": Q is more than the full-pipe capacity, so the normal depth is above ~82% of the diameter and the flow may become pressurised (not modelled).");
+  if(Math.max(0,...rows.filter(w=>w._r===r.idx).map(w=>w.y))>.95*r.sec.D)W.push(r.name+": depth exceeds 95% of the diameter; full-pipe flow is not modelled.")}});
+ const nm={M:"mild",S:"steep",C:"critical",H:"horizontal",A:"adverse"};
+ R.forEach(r=>{const types=[];rows.forEach(w=>{if(w._r===r.idx&&types.indexOf(w.ptype)<0)types.push(w.ptype)});
+  res.reaches.push({name:r.name,slope_class:nm[r.cls]+" ("+r.cls+")",yn:r.yn,yc:r.yc,types,x0:r.x0,x1:r.x0+r.L,z0:r.z0,S0:r.S0})});
+ return res}
+root.GVF={compute,LEN,mkSec,en,mo,alt,conj};
+})(typeof window!=="undefined"?window:globalThis);
+</script>
+<script>window.PRESETS=[{"name":"Gate, then jump, then uniform flow at normal depth","discharge":12.0,"start_bed_elevation":100.0,"step":2.0,"tolerance":1e-06,"upstream":{"type":"gate","opening":0.3,"cc":0.61},"downstream":{"type":"normal"},"reaches":[{"length":400,"slope":0.0003,"n":0.013,"section":{"type":"rectangular","width":5}}]},{"name":"Gate, then jump, then backwater to a raised tailwater (M1)","discharge":12.0,"start_bed_elevation":100.0,"step":2.0,"tolerance":1e-06,"upstream":{"type":"gate","opening":0.5,"cc":0.61},"downstream":{"type":"depth","depth":1.4},"reaches":[{"length":300,"slope":0.001,"n":0.013,"section":{"type":"rectangular","width":5}}]},{"name":"Steep to mild: jump forms in the mild reach","discharge":8.0,"start_bed_elevation":100.0,"step":5.0,"upstream":{"type":"critical"},"downstream":{"type":"normal"},"reaches":[{"length":300,"slope":0.08,"n":0.015,"section":{"type":"rectangular","width":4}},{"length":600,"slope":0.0005,"n":0.015,"section":{"type":"rectangular","width":4}}]},{"name":"Mild to steep break (critical depth at the break)","discharge":8.0,"start_bed_elevation":100.0,"step":10.0,"upstream":{"type":"normal"},"downstream":{"type":"normal"},"reaches":[{"length":600,"slope":0.0005,"n":0.015,"section":{"type":"rectangular","width":4}},{"length":600,"slope":0.02,"n":0.015,"section":{"type":"rectangular","width":4}}]},{"name":"M1 backwater behind a weir","discharge":10.0,"start_bed_elevation":50.0,"step":20.0,"upstream":{"type":"normal"},"downstream":{"type":"weir","crest":1.5,"cw":1.7},"reaches":[{"length":3000,"slope":0.0004,"n":0.025,"section":{"type":"rectangular","width":6}}]},{"name":"Drowned jump (tailwater too high)","discharge":12.0,"start_bed_elevation":100.0,"step":5.0,"upstream":{"type":"gate","opening":0.5},"downstream":{"type":"depth","depth":2.6},"reaches":[{"length":200,"slope":0.001,"n":0.013,"section":{"type":"rectangular","width":5}}]},{"name":"Swept-out jump (tailwater too low)","discharge":12.0,"start_bed_elevation":100.0,"step":5.0,"upstream":{"type":"gate","opening":0.5},"downstream":{"type":"depth","depth":0.95},"reaches":[{"length":120,"slope":0.001,"n":0.013,"section":{"type":"rectangular","width":5}}]},{"name":"Two reaches: changing slope and roughness","discharge":15.0,"start_bed_elevation":200.0,"step":25.0,"upstream":{"type":"normal"},"downstream":{"type":"depth","depth":2.4},"reaches":[{"length":1500,"slope":0.0008,"n":0.03,"section":{"type":"trapezoidal","width":5,"side_slope":1.5}},{"length":1500,"slope":0.0003,"n":0.022,"section":{"type":"trapezoidal","width":5,"side_slope":1.5}}]},{"name":"Circular culvert: steep pipe into a mild pipe (jump)","discharge":1.6,"start_bed_elevation":30.0,"step":2.0,"upstream":{"type":"critical"},"downstream":{"type":"normal"},"reaches":[{"length":60,"slope":0.03,"n":0.013,"section":{"type":"circular","diameter":1.2}},{"length":100,"slope":0.002,"n":0.013,"section":{"type":"circular","diameter":1.2}}]},{"name":"Horizontal then adverse slope ending in a free overfall (H2, A2)","discharge":3.0,"start_bed_elevation":10.0,"step":5.0,"upstream":{"type":"none"},"downstream":{"type":"overfall"},"reaches":[{"length":200,"slope":0.0,"n":0.015,"section":{"type":"rectangular","width":3}},{"length":150,"slope":-0.0005,"n":0.015,"section":{"type":"rectangular","width":3}}]}];</script>
+<script id="ui">
+(function(){
+const $=s=>document.querySelector(s),P=window.PRESETS,D=s=>JSON.parse(JSON.stringify(s));
+let st,res,snap;
+const UPT={normal:"Normal depth (steady uniform flow)",critical:"Critical depth (lake or reservoir entrance)",gate:"Sluice gate (fast, shallow start)",depth:"Known depth",level:"Known water level",none:"None / free"};
+const DNT={normal:"Normal depth (steady uniform flow)",overfall:"Free overfall (drop at the end)",weir:"Weir (rectangular channel only)",depth:"Known tailwater depth",level:"Known water level (lake)",none:"None / free"};
+const BF={depth:[["depth","Depth (m)"]],level:[["level","Water surface elevation (m)"]],gate:[["opening","Gate opening (m)"],["cc","Contraction coefficient Cc"]],weir:[["crest","Crest height above bed (m)"],["cw","Weir coefficient Cw"]]};
+const HELP={upstream:"A gate or a critical-depth start gives supercritical flow. A mild channel fed from far upstream needs no condition here.",downstream:"Subcritical flow is controlled from the downstream end, so a tailwater depth or weir decides where a jump forms."};
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const inp=(p,l,h,v)=>`<label>${l}<input data-p="${p}" value="${esc(v??"")}" inputmode="decimal" autocomplete="off">${h?`<small>${h}</small>`:""}</label>`;
+const sel=(p,l,o,v,h)=>`<label>${l}<select data-p="${p}">${Object.keys(o).map(k=>`<option value="${k}"${k==v?" selected":""}>${o[k]}</option>`).join("")}</select>${h?`<small>${h}</small>`:""}</label>`;
+const bc=(s,T,l)=>{const b=st[s]||{type:"normal"},t=b.type||"normal";return`<fieldset><legend>${l}</legend>${sel(s+".type","Condition",T,t,HELP[s])}<div class="g">${(BF[t]||[]).map(f=>inp(s+"."+f[0],f[1],"",b[f[0]]??({cc:.61,cw:1.7}[f[0]]))).join("")}</div></fieldset>`};
+const SEC={rectangular:"Rectangular",trapezoidal:"Trapezoidal",circular:"Circular"};
+function reach(r,i){const s=r.section||{},t=s.type||"rectangular",p="reaches."+i+".";
+ const dims=t=="rectangular"?inp(p+"section.width","Width (m)","",s.width):t=="trapezoidal"?inp(p+"section.width","Bottom width (m)","",s.width)+inp(p+"section.side_slope","Side slope (H per 1 V)","",s.side_slope):inp(p+"section.diameter","Diameter (m)","",s.diameter);
+ return`<fieldset><legend>Reach ${i+1}</legend><div class="g">${inp(p+"length","Length (m)","",r.length)}${inp(p+"slope","Bed slope (m/m)","Positive falls downstream; 0 is horizontal; negative is adverse (bed rises).",r.slope)}${inp(p+"n","Manning's n","About 0.013 smooth concrete, 0.03 earth channel.",r.n)}${sel(p+"section.type","Cross-section",SEC,t)}${dims}</div>${st.reaches.length>1?`<div class="row"><button data-a="del${i}">Remove reach ${i+1}</button></div>`:""}</fieldset>`}
+function render(){
+ $("#form").innerHTML=`<h2>Channel</h2><label>Example<select id="pre">${P.map((p,i)=>`<option value="${i}">${esc(p.name)}</option>`).join("")}</select></label>
+ <div class="g" style="margin-top:.6rem">${inp("discharge","Design discharge Q (m³/s)","Flow the channel carries.",st.discharge)}${inp("start_bed_elevation","Start bed elevation (m)","Bed level at the upstream end.",st.start_bed_elevation)}${inp("step","Step size (m)","Distance between calculation points; smaller is more accurate.",st.step)}${inp("tolerance","Tolerance (m)","How closely each depth is solved.",st.tolerance)}</div>
+ ${bc("upstream",UPT,"Upstream end")}${bc("downstream",DNT,"Downstream end")}${st.reaches.map(reach).join("")}
+ <div class="row"><button data-a="add">Add reach</button><label style="display:flex;gap:.4rem;align-items:center;width:auto"><input type="checkbox" data-p="egl" style="width:auto"${st.egl?" checked":""}>Show energy grade line</label></div>
+ <div class="row"><button class="p" data-a="run">Compute profile</button></div>
+ <details style="margin-top:1rem"><summary>Plain-language glossary</summary><dl>
+ <dt>Mild slope</dt><dd>Normal depth is greater than critical depth: flow is calm (subcritical) when uniform.</dd>
+ <dt>Steep slope</dt><dd>Normal depth is less than critical depth: flow is fast (supercritical) when uniform.</dd>
+ <dt>Critical slope</dt><dd>Normal depth equals critical depth. Horizontal and adverse slopes have no normal depth.</dd>
+ <dt>Normal depth</dt><dd>Depth of steady uniform flow (Manning's equation).</dd>
+ <dt>Critical depth</dt><dd>Depth where the Froude number is 1 and specific energy is smallest.</dd>
+ <dt>Froude number</dt><dd>Velocity divided by wave speed. Below 1 subcritical, above 1 supercritical.</dd>
+ <dt>Hydraulic jump</dt><dd>Abrupt change from fast shallow flow to slow deep flow, with energy loss.</dd>
+ <dt>Sequent depth</dt><dd>The depth after the jump: it has the same momentum as the depth before it.</dd>
+ <dt>Energy grade line (EGL)</dt><dd>Water surface plus velocity head; it always falls in the flow direction.</dd></dl></details>`;
+ $("#pre").value=cur}
+let cur=0;
+function read(){document.querySelectorAll("[data-p]").forEach(e=>{const k=e.dataset.p.split(".");let o=st;for(let i=0;i<k.length-1;i++){if(o[k[i]]===undefined)o[k[i]]={};o=o[k[i]]}o[k[k.length-1]]=e.type=="checkbox"?e.checked:e.value})}
+const ticks=(a,b,n)=>{const s=(b-a)/n,p=Math.pow(10,Math.floor(Math.log10(s))),f=s/p,t=(f<1.5?1:f<3?2:f<7?5:10)*p,o=[];for(let v=Math.ceil(a/t)*t;v<=b+1e-9;v+=t)o.push(+v.toPrecision(12));return o};
+function plot(o){const W=760,H=o.h||330,m={l:58,r:14,t:30,b:42};let X=[],Y=[];{let lr=0,lw=58;(o.leg||[]).forEach(l=>{const wd=34+l[0].length*6;if(lw+wd>W-8){lw=58;lr++}lw+=wd});m.t=14+17*(lr+1)}
+ o.lines.forEach(l=>l.p.forEach(q=>{X.push(q[0]);Y.push(q[1])}));(o.dots||[]).forEach(d=>{X.push(d.p[0]);Y.push(d.p[1])});(o.areas||[]).forEach(a=>a.p.forEach(q=>Y.push(q[1])));
+ let x0=Math.min(...X),x1=Math.max(...X),y0=Math.min(...Y),y1=Math.max(...Y);if(x1===x0)x1=x0+1;if(y1===y0)y1=y0+1;const pd=(y1-y0)*.06;y0-=pd;y1+=pd;
+ const sx=x=>m.l+(x-x0)/(x1-x0)*(W-m.l-m.r),sy=y=>H-m.b-(y-y0)/(y1-y0)*(H-m.t-m.b),pt=p=>p.map(q=>sx(q[0]).toFixed(1)+","+sy(q[1]).toFixed(1)).join(" ");
+ let s=`<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(o.yl)} versus distance">`;
+ ticks(x0,x1,8).forEach(v=>s+=`<line x1="${sx(v)}" x2="${sx(v)}" y1="${m.t}" y2="${H-m.b}" stroke="#27394a"/><text x="${sx(v)}" y="${H-m.b+15}" fill="#8aa1b2" font-size="11" text-anchor="middle">${v}</text>`);
+ ticks(y0,y1,6).forEach(v=>s+=`<line y1="${sy(v)}" y2="${sy(v)}" x1="${m.l}" x2="${W-m.r}" stroke="#27394a"/><text x="${m.l-6}" y="${sy(v)+4}" fill="#8aa1b2" font-size="11" text-anchor="end">${v}</text>`);
+ (o.bands||[]).forEach(b=>s+=`<rect x="${sx(b.x0).toFixed(1)}" y="${m.t}" width="${Math.max(1.5,sx(b.x1)-sx(b.x0)).toFixed(1)}" height="${H-m.t-m.b}" fill="${b.c}"/>`);
+ (o.areas||[]).forEach(a=>s+=`<polygon points="${pt(a.p)}" fill="#6d8296" fill-opacity=".25"/>`);
+ (o.vl||[]).forEach(v=>s+=`<line x1="${sx(v.x)}" x2="${sx(v.x)}" y1="${m.t}" y2="${H-m.b}" stroke="${v.c}" stroke-width="${v.w||1}" stroke-dasharray="${v.d||""}"/>`);
+ o.lines.forEach(l=>s+=`<polyline points="${pt(l.p)}" fill="none" stroke="${l.c}" stroke-width="${l.w||2}" stroke-dasharray="${l.d||""}"/>`);
+ (o.dots||[]).forEach(d=>s+=`<circle cx="${sx(d.p[0]).toFixed(1)}" cy="${sy(d.p[1]).toFixed(1)}" r="${d.r||4}" fill="${d.c}" stroke="#0e1923"/>`);
+ s+=`<text x="${(m.l+W-m.r)/2}" y="${H-5}" fill="#d9e6ef" font-size="12" text-anchor="middle">${o.xl}</text><text transform="translate(13 ${(m.t+H-m.b)/2}) rotate(-90)" fill="#d9e6ef" font-size="12" text-anchor="middle">${o.yl}</text>`;
+ let lx=58,lrow=0;(o.leg||[]).forEach(l=>{const wd=34+l[0].length*6;if(lx+wd>W-8){lx=58;lrow++}const yy=14+17*lrow;s+=`<line x1="${lx}" x2="${lx+18}" y1="${yy}" y2="${yy}" stroke="${l[1]}" stroke-width="2" stroke-dasharray="${l[2]||""}"/><text x="${lx+22}" y="${yy+4}" fill="#d9e6ef" font-size="11">${l[0]}</text>`;lx+=wd});
+ return s+"</svg>"}
+// ===================== 3D (WebGL, hand written, no libraries) =====================
+const V={yaw:-.7,pitch:.42,dist:2.7,zoom:1,tg:[0,0,0],ortho:false,ride:false,mode:0,E:1,W:1,idx:0,anim:true,follow:true,sp:1,t:0,px:0,f:0,egl:true,nd:false,cd:false};
+let secs=[],S3=null,GL=null,PT=[],TS=1,raf=0,last=0,spawn=0;
+const m4={mul(a,b){const o=new Array(16);for(let i=0;i<4;i++)for(let j=0;j<4;j++){let s=0;for(let k=0;k<4;k++)s+=a[k*4+j]*b[i*4+k];o[i*4+j]=s}return o},
+ persp(f,a,n,r){const t=1/Math.tan(f/2),q=1/(n-r);return[t/a,0,0,0,0,t,0,0,0,0,(r+n)*q,-1,0,0,2*r*n*q,0]},
+ ortho(l,r,b,t,n,f){return[2/(r-l),0,0,0,0,2/(t-b),0,0,0,0,-2/(f-n),0,-(r+l)/(r-l),-(t+b)/(t-b),-(f+n)/(f-n),1]},
+ look(e,c,u){const nz=v=>{const l=Math.hypot(...v)||1;return v.map(x=>x/l)},cr=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]],d=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
+  const z=nz([e[0]-c[0],e[1]-c[1],e[2]-c[2]]),x=nz(cr(u,z)),y=cr(z,x);return[x[0],y[0],z[0],0,x[1],y[1],z[1],0,x[2],y[2],z[2],0,-d(x,e),-d(y,e),-d(z,e),1]}};
+const PRE="#ifdef GL_FRAGMENT_PRECISION_HIGH\nprecision highp float;\n#else\nprecision mediump float;\n#endif\n";
+const VS="attribute vec3 aP;attribute vec3 aN;attribute vec4 aC;uniform mat4 uM;varying vec3 vP;varying vec3 vN;varying vec4 vC;void main(){vP=aP;vN=aN;vC=aC;gl_Position=uM*vec4(aP,1.);}";
+const FS_SOLID=PRE+`varying vec3 vP;varying vec3 vN;varying vec4 vC;uniform float uLit;uniform vec3 uL;
+float h(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+void main(){vec3 n=normalize(vN),c=vC.rgb;if(uLit>.5){float d=abs(dot(n,normalize(uL))),sk=.5+.5*n.y,g=.9+.1*h(floor(vP.xz*240.));c*=g*(.34+.5*d+.3*sk);}gl_FragColor=vec4(c,vC.a);}`;
+const FS_WATER=PRE+`varying vec3 vP;varying vec3 vN;varying vec4 vC;uniform vec3 uL;uniform vec3 uE;uniform float uT,uMode,uDmax,uToe,uEnd,uFoam;
+float h(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+float vn(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);return mix(mix(h(i),h(i+vec2(1.,0.)),f.x),mix(h(i+vec2(0.,1.)),h(i+vec2(1.,1.)),f.x),f.y);}
+vec3 frc(float f){return f<1.?mix(vec3(.18,.56,.85),vec3(.93,.93,.89),clamp((f-.2)/.8,0.,1.)):mix(vec3(.93,.93,.89),vec3(.9,.31,.25),clamp((f-1.)/3.,0.,1.));}
+void main(){float d=vC.x,fr=vC.y,u=vC.z,tau=vC.w;vec2 q=vec2((tau-uT)*3.,u*2.5);
+ float k=.25+.5*clamp(fr,0.,2.5)/2.5,e=.04,n0=vn(q*3.),nx=vn((q+vec2(e,0.))*3.),nz=vn((q+vec2(0.,e))*3.);
+ float s=(vP.x-uToe)/max(uEnd-uToe,1e-5),roll=uFoam*smoothstep(-.03,.03,s)*(1.-smoothstep(1.,1.7,s));
+ vec2 q2=vec2(vP.x*90.-uT*1.3,vP.z*90.+uT*.7);float t1=vn(q2),t2=vn(q2*2.1+7.),nn=.6*t1+.4*t2,kk=k+roll*1.8;
+ vec3 N=normalize(vN+vec3(-(nx-n0)/e,0.,-(nz-n0)/e)*.07*kk+vec3(t1-.5,0.,t2-.5)*.22*roll);
+ vec3 V=normalize(uE-vP),L=normalize(uL);float kd=1.-exp(-3.*d/max(uDmax,.01));
+ vec3 base=mix(vec3(.34,.72,.74),vec3(.02,.16,.30),kd);
+ if(uMode>1.5)base=mix(vec3(.66,.89,.95),vec3(.07,.26,.55),clamp(d/uDmax,0.,1.));else if(uMode>.5)base=mix(base,frc(fr),.78);
+ base=mix(base,vec3(.5,.74,.8),roll*.55);float nl=max(dot(N,L),0.),fres=pow(1.-max(dot(N,V),0.),3.),sp=pow(max(dot(reflect(-L,N),V),0.),70.);
+ float foam=clamp(roll*smoothstep(.38,.85,nn+(1.-clamp(s,0.,1.))*.22)+smoothstep(.62,.9,vn(q*6.+3.))*clamp((fr-1.6)/3.,0.,1.)*.35,0.,1.);
+ vec3 col=base*(.5+.5*nl)+vec3(.3,.45,.6)*fres*.55+vec3(1.)*sp*.7*(1.-foam);col=mix(col,vec3(.9,.95,.98),foam*.92);
+ gl_FragColor=vec4(col,mix(mix(.72,.93,kd)+fres*.1,.98,foam));}`;
+function initGL(cv){
+ const gl=cv.getContext("webgl",{antialias:true,alpha:false});if(!gl)return null;
+ const prog=(fs)=>{const sh=(t,s)=>{const o=gl.createShader(t);gl.shaderSource(o,s);gl.compileShader(o);if(!gl.getShaderParameter(o,gl.COMPILE_STATUS))throw new Error(gl.getShaderInfoLog(o));return o};
+  const p=gl.createProgram();gl.attachShader(p,sh(gl.VERTEX_SHADER,VS));gl.attachShader(p,sh(gl.FRAGMENT_SHADER,fs));["aP","aN","aC"].forEach((n,i)=>gl.bindAttribLocation(p,i,n));gl.linkProgram(p);if(!gl.getProgramParameter(p,gl.LINK_STATUS))throw new Error(gl.getProgramInfoLog(p));return p};
+ GL={gl,solid:prog(FS_SOLID),water:prog(FS_WATER),mesh:{}};[0,1,2].forEach(i=>gl.enableVertexAttribArray(i));return GL}
+const up=(name,arr,mode)=>{const gl=GL.gl;let m=GL.mesh[name];if(!m)m=GL.mesh[name]={buf:gl.createBuffer()};gl.bindBuffer(gl.ARRAY_BUFFER,m.buf);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(arr),gl.STATIC_DRAW);m.n=arr.length/10;m.mode=mode||gl.TRIANGLES};
+const bed_=(w)=>w.z;
+function sceneBuild(){
+ const rows=res.rows,E=V.E,Wf=V.W,n=rows.length,maxN=secs.some(s=>s.kind==="circular")?70:110,idx=[],stride=Math.max(1,Math.ceil(n/maxN));
+ rows.forEach((w,i)=>{if(i%stride===0||w.note||i===n-1)idx.push(i)});
+ const zr=Math.min(...rows.map(w=>w.z)),Y=(w,h)=>(w.z+h-zr)*E,P=(w,p)=>[w.x,Y(w,p[1]),p[0]*Wf],SW=idx.map(i=>rows[i]);
+ const WH=secs.map((s,q)=>Math.max(1e-3,...rows.filter(w=>w._r===q).map(w=>w.y))*1.5),dmax=Math.max(...rows.map(w=>w.y));
+ const solid=[],trans=[],water=[],lines=[],G={solid,trans,water,lines};
+ const cr=(a,b)=>[a[1]*b[2]-a[2]*b[1],a[2]*b[0]-a[0]*b[2],a[0]*b[1]-a[1]*b[0]];
+ const Q=(L,p,c)=>{const a=[p[1][0]-p[0][0],p[1][1]-p[0][1],p[1][2]-p[0][2]],b=[p[3][0]-p[0][0],p[3][1]-p[0][1],p[3][2]-p[0][2]];let nrm=cr(a,b);const l=Math.hypot(...nrm)||1;nrm=nrm.map(v=>v/l);
+  [0,1,2,0,2,3].forEach(k=>L.push([...p[k],...nrm,...c]))};
+ const O=(w,full)=>{const s=secs[w._r],cir=s.kind==="circular";return outl(s,full?(cir?s.D:WH[w._r]):w.y,full&&cir).map(p=>P(w,p))};
+ let tau=0;const TAU=[0];
+ for(let k=1;k<SW.length;k++){const a=SW[k-1],b=SW[k];tau+=b.x>a.x?(b.x-a.x)*.5*(1/a.v+1/b.v)/TS:0;TAU.push(tau)}
+ const earth=[.47,.36,.25,1],conc=[.63,.65,.67,1],grass=[.28,.38,.2,1],pipe=[.6,.66,.72,1];
+ for(let k=0;k<SW.length-1;k++){const A=SW[k],B=SW[k+1];if(!(B.x>A.x)||A._r!==B._r)continue;const s=secs[A._r],cir=s.kind==="circular",sa=O(A,true),sb=O(B,true),wa=O(A,false),wb=O(B,false);
+  const body=cir?pipe:s.kind==="trapezoidal"?earth:conc;
+  for(let q=0;q<sa.length-1;q++){const bedq=!cir&&q===1,low=cir&&Math.abs(q+.5-sa.length/2+.5)<sa.length/4+.01,c=bedq?body.map((v,i)=>i<3?v*.72:v):body;
+   if((cir&&!low)||(!cir&&s.kind==="rectangular"&&q!==1))Q(trans,[sa[q],sa[q+1],sb[q+1],sb[q]],cir?[.75,.85,.95,.14]:[.72,.83,.92,.22]);else Q(solid,[sa[q],sa[q+1],sb[q+1],sb[q]],c)}
+  if(!cir){const wd=Math.abs(sa[sa.length-1][2]-sa[0][2]),m=wd*.9;
+   Q(solid,[[A.x,sa[0][1],sa[0][2]-m],[A.x,sa[0][1],sa[0][2]],[B.x,sb[0][1],sb[0][2]],[B.x,sb[0][1],sb[0][2]-m]],grass);
+   Q(solid,[[A.x,sa[sa.length-1][1],sa[sa.length-1][2]],[A.x,sa[sa.length-1][1],sa[sa.length-1][2]+m],[B.x,sb[sb.length-1][1],sb[sb.length-1][2]+m],[B.x,sb[sb.length-1][1],sb[sb.length-1][2]]],grass)}
+  const C=14,pt=(w,u)=>[w.x,Y(w,w.y),u*secs[w._r].top(w.y)/2*Wf];
+  const sl=(i)=>{const p=SW[Math.max(0,i-1)],q=SW[Math.min(SW.length-1,i+1)],dx=q.x-p.x||1,m=(Y(q,q.y)-Y(p,p.y))/dx,l=Math.hypot(m,1);return[-m/l,1/l,0]};
+  const na=sl(k),nb=sl(k+1);
+  for(let c=0;c<C;c++){const u0=-1+2*c/C,u1=-1+2*(c+1)/C,v=(w,u,t)=>[...pt(w,u),...(w===A?na:nb),w.y,w.fr,u,t];
+   const pa0=v(A,u0,TAU[k]),pa1=v(A,u1,TAU[k]),pb1=v(B,u1,TAU[k+1]),pb0=v(B,u0,TAU[k+1]);[pa0,pa1,pb1,pa0,pb1,pb0].forEach(x=>water.push(x))}
+  if(V.egl){const c0=[A.x,Y(A,A.e),0],c1=[B.x,Y(B,B.e),0];Q(trans,[[A.x,Y(A,A.y),0],c0,c1,[B.x,Y(B,B.y),0]],[.91,.76,.42,.2]);lines.push([...c0,0,1,0,.95,.8,.42,1],[...c1,0,1,0,.95,.8,.42,1])}}
+ res.reaches.forEach((q,qi)=>{const s=secs[qi],hw=q.x1>q.x0?1:1,z1=q.z0-q.S0*(q.x1-q.x0),pl=(y,c)=>{const h=s.top(y)/2*Wf*1.04;Q(trans,[[q.x0,(q.z0+y-zr)*E,-h],[q.x0,(q.z0+y-zr)*E,h],[q.x1,(z1+y-zr)*E,h],[q.x1,(z1+y-zr)*E,-h]],c)};
+  if(V.nd&&q.yn)pl(q.yn,[.5,.82,.6,.16]);if(V.cd)pl(q.yc,[.94,.49,.45,.16]);
+  if(qi>0){const w=rows.find(r=>r._r===qi),h=s.top(Math.max(w.y,.01))*Wf*.9;lines.push([w.x,Y(w,0),-h,0,1,0,.85,.9,.95,1],[w.x,Y(w,0),h,0,1,0,.85,.9,.95,1])}});
+ const J=res.jumps.filter(j=>j.status==="free");
+ J.forEach(j=>{const b=rows.find(w=>w.note.indexOf("jump toe")===0),e=rows.find(w=>w.note==="end of roller"),s=secs[j.reach],h=s.top(j.y2)/2*Wf*1.15;
+  [[b,.3],[e,.2]].forEach(([w,al])=>Q(trans,[[w.x,Y(w,0),-h],[w.x,Y(w,0),h],[w.x,Y(w,Math.max(b.e,w.e)),h],[w.x,Y(w,Math.max(b.e,w.e)),-h]],[.94,.64,.37,al]))});
+ let lo=[1e99,1e99,1e99],hi=[-1e99,-1e99,-1e99];[solid,water].forEach(L=>L.forEach(v=>{for(let i=0;i<3;i++){lo[i]=Math.min(lo[i],v[i]);hi[i]=Math.max(hi[i],v[i])}}));
+ const C=lo.map((v,i)=>(v+hi[i])/2),R=Math.hypot(...hi.map((v,i)=>v-lo[i]))/2||1,flat=L=>{const o=[];L.forEach(v=>{o.push((v[0]-C[0])/R,(v[1]-C[1])/R,(v[2]-C[2])/R,v[3],v[4],v[5],v[6],v[7],v[8],v[9])});return o};
+ up("solid",flat(solid));up("trans",flat(trans));up("water",flat(water));up("lines",flat(lines),GL.gl.LINES);
+ const j0=J[0],toe=j0?rows.find(w=>w.note.indexOf("jump toe")===0):null;
+ let focus=null;if(j0){const e=rows.find(w=>w.note==="end of roller"),xm=(j0.x+e.x)/2,a=at(xm);focus={tg:[(xm-C[0])/R,(Y(a,a.y)-C[1])/R,-C[2]/R],dist:Math.min(2.7,Math.max(.05,9*(e.x-j0.x)/R/1.36))}}
+ return{C,R,focus,B:hi.map((v,i)=>(v-lo[i])/2/R),zr,Y,WH,dmax,toe:j0?(j0.x-C[0])/R:0,end:j0?(j0.x_end-C[0])/R:1,foam:j0?1:0,E,Wf}}
+const nrm=p=>[(p[0]-S3.C[0])/S3.R,(p[1]-S3.C[1])/S3.R,(p[2]-S3.C[2])/S3.R];
+function at(x){const r=res.rows;let lo=0,hi=r.length-1;while(lo<hi){const m=(lo+hi+1)>>1;if(r[m].x<=x)lo=m;else hi=m-1}
+ const a=r[lo],b=r[lo+1];if(!b||b.x<=a.x||b._r!==a._r||b.seg!==a.seg||x<=a.x)return a;
+ const u=(x-a.x)/(b.x-a.x),y=a.y+u*(b.y-a.y),s=secs[a._r],A=s.area(y),v=res.Q/A;
+ return{x,z:a.z+u*(b.z-a.z),y,v,fr:res.Q/(A*Math.sqrt(9.81*A/s.top(y))),e:a.e+u*(b.e-a.e),sf:a.sf,_r:a._r,reach:a.reach,ptype:a.ptype,flow:a.flow,note:"",seg:a.seg}}
+const rowAt=x=>{const r=res.rows;let lo=0,hi=r.length-1;while(lo<hi){const m=(lo+hi+1)>>1;if(r[m].x<=x)lo=m;else hi=m-1}return lo};
+const cs=()=>V.follow?at(V.px):res.rows[V.idx];
+function frame(){
+ if(!GL||!S3)return;const{gl}=GL,cv=gl.canvas,ov=$("#ov"),dpr=Math.min(2,window.devicePixelRatio||1),w=cv.clientWidth,h=cv.clientHeight;if(!w||!h)return;
+ if(cv.width!==Math.round(w*dpr)){cv.width=ov.width=Math.round(w*dpr);cv.height=ov.height=Math.round(h*dpr)}
+ const asp=w/h,cp=Math.cos(V.pitch),f=[Math.sin(V.yaw)*cp,Math.sin(V.pitch),Math.cos(V.yaw)*cp];
+ let tg=V.tg;if(V.ride){const a=at(V.px);tg=nrm([a.x+0,S3.Y(a,a.y),0])}
+ const d=V.ortho?5:V.dist,eye=[tg[0]+f[0]*d,tg[1]+f[1]*d,tg[2]+f[2]*d],view=m4.look(eye,tg,[0,1,0]);let proj;
+ if(V.ortho){const B=S3.B,hw=Math.abs(view[0])*B[0]+Math.abs(view[4])*B[1]+Math.abs(view[8])*B[2],hh=Math.abs(view[1])*B[0]+Math.abs(view[5])*B[1]+Math.abs(view[9])*B[2],hs=Math.max(hh,hw/asp)*1.12/V.zoom;proj=m4.ortho(-hs*asp,hs*asp,-hs,hs,.05,40)}else proj=m4.persp(.8,asp,.004,60);
+ const M=m4.mul(proj,view);GL.M=M;GL.eye=eye;
+ gl.viewport(0,0,cv.width,cv.height);gl.clearColor(.043,.075,.105,1);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);gl.enable(gl.DEPTH_TEST);gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
+ const L=[.45,.8,.35],bind=(n)=>{const m=GL.mesh[n];gl.bindBuffer(gl.ARRAY_BUFFER,m.buf);gl.vertexAttribPointer(0,3,gl.FLOAT,false,40,0);gl.vertexAttribPointer(1,3,gl.FLOAT,false,40,12);gl.vertexAttribPointer(2,4,gl.FLOAT,false,40,24);return m};
+ const run=(p,n,lit,mask)=>{gl.useProgram(p);gl.uniformMatrix4fv(gl.getUniformLocation(p,"uM"),false,new Float32Array(M));gl.uniform3fv(gl.getUniformLocation(p,"uL"),L);gl.uniform1f(gl.getUniformLocation(p,"uLit"),lit);gl.depthMask(mask);const m=bind(n);gl.drawArrays(m.mode,0,m.n)};
+ run(GL.solid,"solid",1,true);run(GL.solid,"trans",0,false);
+ const p=GL.water;gl.useProgram(p);const U=(n,v)=>gl.uniform1f(gl.getUniformLocation(p,n),v);gl.uniform3fv(gl.getUniformLocation(p,"uE"),eye);U("uT",V.t);U("uMode",V.mode);U("uDmax",S3.dmax);U("uToe",S3.toe);U("uEnd",S3.end);U("uFoam",S3.foam);
+ run(p,"water",1,false);
+ const dy=[],x0=res.rows[0].x,Y=S3.Y,Wf=S3.Wf;
+ for(const q of PT){const a=at(q.x),b=at(Math.max(x0,q.x-a.v*TS*.1)),h1=nrm([q.x,Y(a,a.y),q.l*.9*secs[a._r].top(a.y)/2*Wf]),h0=nrm([b.x,Y(b,b.y),q.l*.9*secs[b._r].top(b.y)/2*Wf]);dy.push(...h0,0,1,0,1,1,1,.8,...h1,0,1,0,1,1,1,.8)}
+ up("dyn",dy,gl.LINES);run(GL.solid,"lines",0,false);run(GL.solid,"dyn",0,false);overlay(ov,w,h,dpr)}
+function scr(p,w,h){const m=GL.M,n=nrm(p),x=m[0]*n[0]+m[4]*n[1]+m[8]*n[2]+m[12],y=m[1]*n[0]+m[5]*n[1]+m[9]*n[2]+m[13],ww=m[3]*n[0]+m[7]*n[1]+m[11]*n[2]+m[15];return ww<=0?null:[(x/ww*.5+.5)*w,(1-(y/ww*.5+.5))*h]}
+function overlay(ov,w,h,dpr){
+ const g=ov.getContext("2d");g.setTransform(dpr,0,0,dpr,0,0);g.clearRect(0,0,w,h);const rows=res.rows,E=S3.E,Wf=S3.Wf,Y=S3.Y,x0=rows[0].x,xe=rows[rows.length-1].x;
+ const sp=(x,l)=>{const a=at(x),hw=secs[a._r].top(a.y)/2;return[x,Y(a,a.y),l*.9*hw*Wf]};
+ g.lineCap="round";g.strokeStyle="rgba(255,255,255,.7)";g.lineWidth=1.2;
+
+ const txt=(t,p,col,dx,dy)=>{const s=scr(p,w,h);if(!s)return;g.font="600 12px 'Segoe UI',system-ui,sans-serif";g.lineWidth=3;g.strokeStyle="#0b141c";g.strokeText(t,s[0]+(dx||6),s[1]+(dy||-6));g.fillStyle=col||"#d9e6ef";g.fillText(t,s[0]+(dx||6),s[1]+(dy||-6))};
+ const w0=rows[0],w1=rows[rows.length-1];txt("upstream",[w0.x,Y(w0,w0.y),0],"#8aa1b2");txt("downstream",[w1.x,Y(w1,w1.y),0],"#8aa1b2",-70);
+ res.reaches.forEach((q,i)=>{if(i>0){const w=rows.find(r=>r._r===i);txt("reach "+(i+1),[w.x,Y(w,0),-secs[i].top(w.y)*Wf*.75],"#c6d3dd")}});
+ res.jumps.filter(j=>j.status==="free").forEach(j=>{const b=rows.find(w=>w.note.indexOf("jump toe")===0),e=rows.find(w=>w.note==="end of roller"),Z=-secs[j.reach].top(j.y2)/2*Wf*1.2;
+  const seg=(a,b2,col)=>{const A=scr(a,w,h),B=scr(b2,w,h);if(A&&B){g.strokeStyle=col;g.lineWidth=2;g.beginPath();g.moveTo(A[0],A[1]);g.lineTo(B[0],B[1]);g.stroke()}};
+  seg([b.x,Y(b,0),Z],[b.x,Y(b,b.y),Z],"#f0a35e");seg([e.x,Y(e,0),Z],[e.x,Y(e,e.y),Z],"#f0a35e");seg([b.x,Y(b,0),Z*1.1],[e.x,Y(e,0),Z*1.1],"#f0a35e");
+  txt("toe  y₁ = "+f3(j.y1)+" m",[b.x,Y(b,b.y/2),Z],"#f0a35e",-120,0);txt("end  y = "+f3(j.y_end)+" m",[e.x,Y(e,e.y/2),Z],"#f0a35e",8,0);
+  txt("jump length ≈ "+j.length.toFixed(1)+" m",[(b.x+e.x)/2,Y(b,0),Z*1.1],"#f0a35e",-60,34)});
+ const q=cs(),s0=secs[q._r],cir=s0.kind==="circular",ring=(pts,col,wd)=>{g.strokeStyle=col;g.lineWidth=wd;g.beginPath();let on=false;pts.forEach(p=>{const s=scr(p,w,h);if(!s)return;if(on)g.lineTo(s[0],s[1]);else{g.moveTo(s[0],s[1]);on=true}});g.stroke()};
+ ring(outl(s0,cir?s0.D:S3.WH[q._r],cir).map(p=>[q.x,Y(q,p[1]),p[0]*Wf]),"#7fe3ff",2);ring(outl(s0,q.y,false).map(p=>[q.x,Y(q,p[1]),p[0]*Wf]),"#ffffff",2);
+ g.font="600 14px 'Segoe UI',system-ui,sans-serif";const hud=`y = ${q.y.toFixed(3)} m    V = ${q.v.toFixed(2)} m/s    Fr = ${q.fr.toFixed(2)} (${q.fr>1?"supercritical":"subcritical"})`;
+ g.lineWidth=3;g.strokeStyle="#0b141c";g.strokeText(hud,10,20);g.fillStyle=q.fr>1?"#ff9a8c":"#8fd0f5";g.fillText(hud,10,20);g.fillStyle="#27394a";g.fillRect(10,28,150,7);g.fillStyle="#52c3e6";g.fillRect(10,28,150*Math.min(1,q.y/S3.dmax),7)}
+function outl(s,h,full){
+ if(s.kind==="rectangular")return[[-s.b/2,h],[-s.b/2,0],[s.b/2,0],[s.b/2,h]];
+ if(s.kind==="trapezoidal")return[[-(s.b/2+s.z*h),h],[-s.b/2,0],[s.b/2,0],[s.b/2+s.z*h,h]];
+ const r=s.D/2,ph=full?Math.PI:Math.acos(Math.max(-1,Math.min(1,1-2*Math.min(h,s.D)/s.D))),k=full?32:14,o=[];
+ for(let i=0;i<=k;i++){const t=-ph+2*ph*i/k;o.push([r*Math.sin(t),r-r*Math.cos(t)])}return o}
+function step(dt){const ts=TS*V.sp,xe=res.rows[res.rows.length-1].x,x0=res.rows[0].x;
+ PT.forEach(p=>{p.x+=at(p.x).v*ts*dt});PT=PT.filter(p=>p.x<xe);spawn+=dt*V.sp;while(spawn>=V.int){spawn-=V.int;PT.push({x:x0,l:Math.random()*2-1})}
+ V.t+=dt*V.sp;V.px+=at(V.px).v*ts*dt;if(V.px>=xe)V.px=x0;V.idx=rowAt(V.px)}
+function loop(tm){raf=requestAnimationFrame(loop);const dt=Math.min(.05,(tm-last)/1000||0);last=tm;if(document.hidden)return;if(V.anim){step(dt);if(V.follow&&++V.f%3===0)panels()}frame()}
+const f3=v=>v.toFixed(3);
+const reachAt=x=>{const R=res.reaches;for(let q=0;q<R.length;q++)if(x<=R[q].x1+1e-9)return q;return R.length-1};
+const bedz=x=>{const q=res.reaches[reachAt(x)];return q.z0-q.S0*(x-q.x0)};
+function xsec(){const w=cs(),s=secs[w._r],rc=res.reaches[w._r],vh=w.e-w.y,cir=s.kind==="circular",top=Math.max(w.y+vh,rc.yn||0,rc.yc)*1.15,Hh=cir?s.D:top;
+ const sh=outl(s,Hh,cir),wt=outl(s,w.y,false),hw=Math.max(...sh.map(p=>Math.abs(p[0])))*1.1,Wd=300,Ht=220,sc=Math.min((Wd-24)/(2*hw),(Ht-30)/Hh),px=l=>(Wd/2+l*sc).toFixed(1),py=h=>(Ht-14-h*sc).toFixed(1);
+ const path=a=>a.map((p,k)=>(k?"L":"M")+px(p[0])+","+py(p[1])).join(""),hl=(h,c,d,t)=>`<line x1="6" x2="${Wd-6}" y1="${py(h)}" y2="${py(h)}" stroke="${c}" stroke-dasharray="${d}"/><text x="${Wd-8}" y="${py(h)-3}" fill="${c}" font-size="10" text-anchor="end">${t}</text>`;
+ const svg=`<svg viewBox="0 0 ${Wd} ${Ht}" style="width:300px;max-width:100%" role="img" aria-label="Cross-section at the selected station"><path d="${path(wt)}Z" fill="rgba(82,195,230,.45)" stroke="var(--water)" stroke-width="1.5"/><path d="${path(sh)}" fill="none" stroke="#8aa1b2" stroke-width="2.5"/>${rc.yn?hl(rc.yn,"#7fcf9b","5 4","normal depth"):""}${hl(rc.yc,"#ef7d73","2 3","critical depth")}${hl(w.y+vh,"#e8c36a","","energy level")}</svg>`;
+ const r=(k,v)=>`<tr><td class="k" style="text-align:left">${k}</td><td>${v}</td></tr>`;
+ $("#xs").innerHTML=svg+`<table>${r("Distance",w.x.toFixed(2)+" m (reach "+w.reach+")")}${r("Depth y",w.y.toFixed(3)+" m")}${r("Normal / critical depth",(rc.yn?rc.yn.toFixed(3):"none")+" / "+rc.yc.toFixed(3)+" m")}${r("Velocity",w.v.toFixed(3)+" m/s")}${r("Froude number",w.fr.toFixed(3)+" ("+(w.fr>1?"supercritical":"subcritical")+")")}${r("Specific energy",w.e.toFixed(3)+" m")}${r("Profile type",w.ptype)}${w.note?r("Note",esc(w.note)):""}</table>`}
+function emd(){const w=cs(),s=secs[w._r],rc=res.reaches[w._r],Q=res.Q,j=res.jumps.find(j=>j.status==="free"&&j.reach===w._r),aE=GVF.alt(s,Q,w.y,rc.yc),aM=GVF.conj(s,Q,w.y,rc.yc);
+ const yl=.6*Math.min(w.y,j?j.y1:1e9,rc.yc*.5,aE||1e9,aM||1e9),yh=Math.min(s.ymax,3*Math.max(rc.yc,w.y,j?j.y2:0,aE||0,aM||0,rc.yn&&rc.yn<4*rc.yc?rc.yn:0));
+ const mk=(f,xl,id,diag,al,txt)=>{const cv=[];for(let k=0;k<=120;k++){const y=yl+(yh-yl)*k/120;cv.push([f(s,Q,y),y])}
+  const xa=Math.min(...cv.map(p=>p[0])),xb=Math.max(...cv.map(p=>p[0])),xv=f(s,Q,w.y),ln=[{p:cv,c:"var(--water)",w:2.4},{p:[[xa,rc.yc],[xb,rc.yc]],c:"var(--crit)",d:"2 3",w:1.3}];
+  if(diag)ln.push({p:[[yl,yl],[yh,yh]],c:"#8aa1b2",d:"5 4",w:1});
+  const dots=[{p:[xv,w.y],c:"#7fe3ff",r:6}];
+  if(al!==null){ln.push({p:[[xv,yl],[xv,yh]],c:"#e8c36a",d:"4 3",w:1.3});dots.push({p:[xv,al],c:"#7fcf9b",r:5})}
+  if(j){ln.push({p:[[f(s,Q,j.y1),j.y1],[f(s,Q,j.y2),j.y2]],c:"var(--jump)",d:"4 3",w:1.4});dots.push({p:[f(s,Q,j.y1),j.y1],c:"#f0a35e",r:4},{p:[f(s,Q,j.y2),j.y2],c:"#f0a35e",r:4})}
+  $(id).innerHTML=plot({xl,yl:"Depth y (m)",h:300,lines:ln,dots,leg:[[diag?"E curve":"M curve","var(--water)"],["Critical depth","var(--crit)","2 3"],["This station","#7fe3ff"],[diag?"Same E (alternate depth)":"Same M (conjugate depth)","#7fcf9b"]].concat(diag?[["E = y","#8aa1b2","5 4"]]:[]).concat(j?[["Jump (before, after)","var(--jump)"]]:[])})+`<p class="k" style="margin:.4rem 0 0">${txt}</p>`};
+ mk(GVF.en,"Specific energy E = y + V²/2g (m)","#ey",true,aE,aE===null?"No alternate depth fits in this pipe.":`At y = ${w.y.toFixed(3)} m the specific energy is E = ${GVF.en(s,Q,w.y).toFixed(3)} m. The same energy could also be carried at the alternate depth ${aE.toFixed(3)} m (${w.y>rc.yc?"supercritical":"subcritical"}). Flow only moves to it if the channel adds or removes energy (a step, a contraction); a jump does not conserve E.`);
+ mk(GVF.mo,"Momentum function M = Q²/(gA) + A·ȳ (m³)","#my",false,aM,aM===null?"No conjugate depth fits in this pipe.":`At y = ${w.y.toFixed(3)} m, M = ${GVF.mo(s,Q,w.y).toFixed(3)} m³. The conjugate depth with the same M is ${aM.toFixed(3)} m. ${w.y<rc.yc?"A hydraulic jump from this supercritical depth ends at that depth.":"A hydraulic jump that ends at this subcritical depth starts at that supercritical depth."}`)}
+function panels(){const w=cs();$("#sv").textContent="x = "+w.x.toFixed(1)+" m"+(w.note&&w.note.indexOf("jump")>=0?" ("+w.note+")":"");if(V.follow)$("#sc").value=V.idx;xsec();emd()}
+function momentumFig(){const Q=res.Q,c=res.curves,mf=cv=>cv.map(([x,y])=>[x,GVF.mo(secs[reachAt(x)],Q,y)]),j=res.jumps.find(j=>j.status==="free");
+ if(!c.sup.length||!c.sub.length)return`<p class="k">Only one kind of flow occurs here (all subcritical or all supercritical), so there is no jump to locate.</p>`;
+ const ln=[{p:mf(c.sup),c:"var(--crit)",w:2.2},{p:mf(c.sub),c:"var(--water)",w:2.2}],dots=[],bands=[];
+ if(j){const M=GVF.mo(secs[j.reach],Q,j.y1);dots.push({p:[j.x,M],c:"#f0a35e",r:6});bands.push({x0:j.x,x1:j.x_end,c:"rgba(240,163,94,.25)"})}
+ return plot({xl:"Distance along channel (m)",yl:"Momentum function M (m³)",h:280,lines:ln,dots,bands,vl:res.reaches.slice(0,-1).map(q=>({x:q.x1,c:"#6d8296",d:"4 3"})),leg:[["M of the supercritical profile (from the gate)","var(--crit)"],["M of the subcritical profile (from the tailwater)","var(--water)"],["Jump toe","#f0a35e"]]})}
+function explain(j){const s=secs[j.reach],Q=res.Q,rc=res.reaches[j.reach],A1=s.area(j.y1),rect=s.kind==="rectangular",e=(v,d)=>v.toFixed(d===undefined?3:d);
+ const chk=rect?` For a rectangle this has the closed form y₂ = (y₁/2)(√(1+8Fr₁²) − 1) = ${e(j.y1/2*(Math.sqrt(1+8*j.fr1*j.fr1)-1))} m, the same value.`:"";
+ const loss=rect?` For a rectangle this equals (y₂ − y₁)³/(4y₁y₂) = ${e(Math.pow(j.y2-j.y1,3)/(4*j.y1*j.y2))} m.`:"";
+ const tail=res.rows[res.rows.length-1];
+ return`<ol class="k" style="line-height:1.6"><li><b>Supercritical profile.</b> From the control upstream the standard step method gives the supercritical depth along the channel (red curve above). At the toe it is y₁ = ${e(j.y1)} m, with V₁ = ${e(Q/A1,2)} m/s and Fr₁ = ${e(j.fr1,2)} (${j.type} jump).</li>
+ <li><b>Sequent depth.</b> A jump conserves momentum, M = Q²/(gA) + A·ȳ. Solving M(y₂) = M(y₁) gives y₂ = ${e(j.y2)} m.${chk}</li>
+ <li><b>Where it forms.</b> The tailwater controls the subcritical flow, so its profile is computed upstream from the downstream end (blue curve). The jump toe is where that depth equals the sequent depth of the supercritical flow, i.e. where the two momentum curves in Figure 3 cross: x = ${e(j.x,2)} m. If the toe were further upstream the tailwater would be too low to hold it (the jump is swept downstream); further downstream it would be too high (the jump is pushed upstream).</li>
+ <li><b>Length.</b> A jump is not a step: the water takes a distance to rise. The empirical rule L ≈ 6.1·y₂ gives ${e(j.length,1)} m, so the roller runs from x = ${e(j.x,2)} m to x = ${e(j.x_end,2)} m. Only y₁, y₂ and L are computed; the S-shaped surface and the foam in between are idealised.</li>
+ <li><b>Energy loss.</b> E₁ = ${e(j.e1)} m before and E₂ = ${e(j.e2)} m after, so ΔE = ${e(j.loss)} m (${e(j.loss_pct,1)}% of E₁), dissipated as turbulence.${loss}</li>
+ <li><b>After the jump.</b> The flow is subcritical and follows the tailwater-controlled profile: ${[...new Set(res.rows.filter(w=>w.x>=j.x_end-1e-9).map(w=>w.ptype))].join(", ")}. At the downstream end the depth is ${e(tail.y)} m${rc.yn?` (normal depth ${e(rc.yn)} m, critical depth ${e(rc.yc)} m)`:""}.</li></ol>`}
+function story(){const r=res,rows=r.rows,j=r.jumps.find(j=>j.status==="free"),end=rows[rows.length-1];if(!j)return"";
+ const t=f=>[...new Set(rows.filter(f).map(w=>w.ptype))].join(", ");
+ return`<p><b>The story along the channel.</b> Upstream the flow is supercritical (${t(w=>w.x<=j.x+1e-9)}): shallow and fast. The depth rises to y₁ = ${f3(j.y1)} m at the toe (x = ${j.x.toFixed(1)} m). The jump then lifts the water over about ${j.length.toFixed(1)} m to ${f3(j.y_end)} m (sequent depth y₂ = ${f3(j.y2)} m), losing ${f3(j.loss)} m of energy. From x = ${j.x_end.toFixed(1)} m the flow is subcritical (${t(w=>w.x>=j.x_end-1e-9)}) and ends with a depth of ${f3(end.y)} m.</p>`}
+const LEARN=`<section><details><summary><b>Learn: the ideas behind the figures</b></summary><div class="k" style="line-height:1.55;margin-top:.6rem">
+<p><b>Specific energy</b> E = y + V²/2g is the energy per unit weight measured from the bed. For a fixed discharge it has a minimum at <b>critical depth</b> (Fr = 1). Every larger E is carried at two depths: a deep slow one (subcritical) and a shallow fast one (supercritical).</p>
+<p><b>Normal depth</b> is the depth of steady uniform flow (Manning's equation) and exists only on a falling bed. Comparing it with critical depth classifies the slope: <b>mild</b> (yn &gt; yc), <b>steep</b> (yn &lt; yc), <b>critical</b> (equal), <b>horizontal</b> or <b>adverse</b> (no normal depth).</p>
+<p><b>Gradually varied flow.</b> When the depth is not the normal depth it changes slowly along the channel, dy/dx = (S₀ − S<sub>f</sub>)/(1 − Fr²). The sign tells the shape. The curves are named by slope letter and zone: zone 1 above both normal and critical depth, zone 2 between them, zone 3 below both.</p>
+<table><tr><th>Slope</th><th>Zone 1</th><th>Zone 2</th><th>Zone 3</th></tr><tr><td>Mild</td><td>M1 (backwater)</td><td>M2 (drawdown)</td><td>M3</td></tr><tr><td>Steep</td><td>S1</td><td>S2</td><td>S3</td></tr><tr><td>Critical</td><td>C1</td><td>none</td><td>C3</td></tr><tr><td>Horizontal / adverse</td><td>none</td><td>H2 / A2</td><td>H3 / A3</td></tr></table>
+<p><b>Standard step method.</b> Between two stations the energy equation z₁ + y₁ + V₁²/2g = z₂ + y₂ + V₂²/2g + S̄<sub>f</sub>Δx is solved for the unknown depth. Subcritical flow is calculated <i>upstream</i> from a downstream control, supercritical flow <i>downstream</i> from an upstream control, because that is the direction information travels.</p>
+<p><b>Hydraulic jump.</b> When fast flow meets a deep tailwater it jumps to the sequent depth y₂, found by equal momentum. Energy is lost (turbulent roller), so E before and after differ, but M does not. The jump forms where the supercritical flow and the tailwater profile have equal M; it has a length of roughly 6·y₂, and the upstream Froude number gives its type (undular &lt; 1.7, weak &lt; 2.5, oscillating &lt; 4.5, steady &lt; 9, strong).</p>
+<p><b>Limits.</b> Steady, one-dimensional, gradually varied flow; prismatic reaches; no sediment, side inflow or losses at changes of section; the jump uses the horizontal-floor momentum equation and an empirical length; the roller shape and foam in the 3D view are illustrations.</p></div></details></section>`;
+function show(){
+ secs=snap.reaches.map(q=>GVF.mkSec(q.section));
+ const r=res,rows=r.rows,free=r.jumps.filter(j=>j.status==="free"),bands=free.map(j=>({x0:j.x,x1:j.x_end,c:"rgba(240,163,94,.28)"})),bd=r.reaches.slice(0,-1).map(q=>({x:q.x1,c:"#6d8296",d:"4 3"}));
+ const lines=[{p:rows.map(w=>[w.x,w.wse]),c:"var(--water)",w:2.6}],areas=[],lg=[["Water surface","var(--water)"],["Bed","var(--bed)"],["Normal depth","var(--norm)","5 4"],["Critical depth","var(--crit)","2 3"]];
+ if(free.length){["sup","sub"].forEach(k=>lines.push({p:r.curves[k].map(p=>[p[0],bedz(p[0])+p[1]]),c:"#9fb4c4",d:"6 4",w:1.1}));lg.push(["Both profiles continued past the jump","#9fb4c4","6 4"],["Jump roller","rgba(240,163,94,.7)"])}
+ if(st.egl){lines.push({p:rows.map(w=>[w.x,w.egl]),c:"var(--egl)",w:1.4});lg.push(["EGL","var(--egl)"])}
+ const zmin=Math.min(...rows.map(w=>w.z));
+ r.reaches.forEach(q=>{const z1=q.z0-q.S0*(q.x1-q.x0);lines.push({p:[[q.x0,q.z0],[q.x1,z1]],c:"var(--bed)",w:2.5},{p:[[q.x0,q.z0+q.yc],[q.x1,z1+q.yc]],c:"var(--crit)",d:"2 3",w:1.3});
+  if(q.yn!==null)lines.push({p:[[q.x0,q.z0+q.yn],[q.x1,z1+q.yn]],c:"var(--norm)",d:"5 4",w:1.3});areas.push({p:[[q.x0,q.z0],[q.x1,z1],[q.x1,zmin-.3],[q.x0,zmin-.3]]})});
+ const f1=plot({xl:"Distance along channel (m)",yl:"Elevation (m)",lines,areas,bands,vl:bd,leg:lg});
+ const f2=plot({xl:"Distance along channel (m)",yl:"Froude number",h:260,lines:[{p:rows.map(w=>[w.x,w.fr]),c:"var(--water)"},{p:[[rows[0].x,1],[rows[rows.length-1].x,1]],c:"#d9e6ef",d:"5 4",w:1}],bands,vl:bd,leg:[["Froude number","var(--water)"],["Fr = 1","#d9e6ef","5 4"]]});
+ let sm=r.reaches.map(q=>`<p><b>${q.name}:</b> ${q.slope_class} slope. Normal depth ${q.yn===null?"none (flat or adverse)":f3(q.yn)+" m"}, critical depth ${f3(q.yc)} m. Profiles: ${q.types.join(", ")||"-"}.</p>`).join("");
+ if(!r.jumps.length)sm+="<p><b>Hydraulic jump:</b> none.</p>";
+ r.jumps.forEach(j=>{sm+=j.status=="free"?`<p><b>Hydraulic jump</b> (${j.type}, Fr₁ = ${j.fr1.toFixed(2)}): toe at x = ${j.x.toFixed(2)} m, end of roller at x = ${j.x_end.toFixed(2)} m (length about ${j.length.toFixed(1)} m, approximate). Depth ${f3(j.y1)} m → ${f3(j.y_end)} m (sequent depth ${f3(j.y2)} m). Energy loss ${f3(j.loss)} m (${j.loss_pct.toFixed(1)}% of E₁).</p>`:j.status=="drowned"?`<p><b>Drowned jump:</b> the tailwater (${f3(j.y_tail)} m) is above the sequent depth (${f3(j.y2)} m) needed for y₁ = ${f3(j.y1)} m, so the jump is pushed up to the upstream end.</p>`:`<p><b>Swept-out jump:</b> flow stays supercritical to the end (${f3(j.y1)} m). The tailwater (${f3(j.y_tail)} m) is below the sequent depth needed (${f3(j.y2)} m).</p>`});
+ const H=["Distance (m)","Reach","Bed elevation (m)","Depth (m)","Water surface elevation (m)","Velocity (m/s)","Froude number","Specific energy (m)","Friction slope","Energy grade line elevation (m)","Profile type","Flow","Note"],K=["x","reach","z","y","wse","v","fr","e","sf","egl","ptype","flow","note"];
+ const cell=(w,k)=>typeof w[k]=="number"&&k!="reach"?(isNaN(w[k])?"":k=="sf"?w[k].toExponential(3):w[k].toFixed(k=="x"?2:4)):w[k];
+ $("#out").innerHTML=`<section><h2>${esc(r.name)}</h2>${sm}${story()}${r.warnings.map(w=>`<p class="w">⚠ ${esc(w)}</p>`).join("")}</section>
+<section><h2>3D view</h2><p class="k" style="margin:0 0 .6rem">Drag to orbit, scroll to zoom, shift-drag to pan. The flow is steady, so the water surface does not change in time: ripples and white streaks travel with the water at the computed velocity (fast and shallow upstream, slower and deeper after the jump). The roller is drawn over its computed length; its foam is an illustration. Depth and width are exaggerated (sliders).</p>
+<div class="row" style="margin:0 0 .5rem"><button data-v="jump">Jump close-up</button><button data-v="3d">Whole channel</button><button data-v="top">Top</button><button data-v="side">Side</button><button data-v="front">Front</button><button data-v="ride">Ride with the water</button><select id="cm" style="width:auto"><option value="0">Natural water</option><option value="1">Colour: Froude number</option><option value="2">Colour: depth</option></select></div>
+<div class="row" style="margin:0 0 .5rem;align-items:center"><button id="pl">⏸ Pause</button><label style="display:flex;gap:.4rem;align-items:center;width:auto">Speed<input type="range" id="sp" min="0.2" max="3" step="0.1" value="1" style="width:100px"></label><label class="cb"><input type="checkbox" id="l_egl">Energy line</label><label class="cb"><input type="checkbox" id="l_nd">Normal depth plane</label><label class="cb"><input type="checkbox" id="l_cd">Critical depth plane</label><span id="tsn" class="k" style="font-size:.78rem"></span></div>
+<div style="position:relative"><canvas id="gl"></canvas><canvas id="ov" style="position:absolute;inset:0;background:none;border:0"></canvas></div><p id="glmsg" class="w" hidden>Your browser could not start WebGL, so the 3D view is unavailable. All the figures below still work.</p>
+<div class="g" style="margin-top:.6rem"><label>Vertical exaggeration: <b id="ev"></b>×<input type="range" id="ex" min="1" max="100" step="0.5"></label><label>Width exaggeration: <b id="wv"></b>×<input type="range" id="wx" min="1" max="100" step="0.5"></label></div>
+<label style="margin-top:.7rem"><span class="row" style="margin:0;gap:.5rem;align-items:center"><input type="checkbox" id="fo" style="width:auto" checked>Panels follow one parcel of water. Or move along the channel yourself: <b id="sv"></b></span><input type="range" id="sc" min="0" step="1"></label>
+<div id="xs" style="display:flex;flex-wrap:wrap;gap:1rem;align-items:flex-start;margin-top:.6rem"></div></section>
+<section><h2>Figure 1: longitudinal profile</h2>${f1}</section><section><h2>Figure 2: Froude number</h2>${f2}</section>
+<section><h2>Figure 3: how the location of the jump is found</h2><p class="k" style="margin:0 0 .4rem">The red curve is the momentum function of the supercritical profile, the blue curve that of the subcritical profile from the tailwater. The jump toe is where they cross.</p>${momentumFig()}${free.length?explain(free[0]):""}</section>
+<section><h2>Figure 4: specific energy diagram (depth y against E)</h2><p class="k" style="margin:0 0 .4rem">For the reach at the station selected above. The nose is critical depth. The dashed 45° line is E = y: at large depth the velocity head is negligible, so the upper branch leans along it. The vertical amber line is one value of E; it cuts the curve at two depths (the alternate depths).</p><div id="ey"></div></section>
+<section><h2>Figure 5: momentum diagram (depth y against M)</h2><p class="k" style="margin:0 0 .4rem">The vertical amber line is one value of M, cutting the curve at two conjugate depths. A jump joins two depths with the same M (orange dashed line); energy is lost across it, which Figure 4 shows.</p><div id="my"></div></section>
+<section><h2>Station table</h2><div class="row" style="margin:0 0 .6rem"><button id="csv">Download CSV</button><span class="k">${rows.length} stations${rows.length>400?" (first 400 shown, the CSV has all)":""}. Rows inside the roller are an idealised shape.</span></div><div class="tw"><table><thead><tr>${H.map(h=>`<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.slice(0,400).map(w=>`<tr>${K.map(k=>`<td>${esc(cell(w,k))}</td>`).join("")}</tr>`).join("")}</tbody></table></div></section>${LEARN}`;
+ $("#csv").onclick=()=>{const q=v=>/[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v,t=[H.join(",")].concat(rows.map(w=>K.map(k=>q(isNaN(w[k])&&typeof w[k]=="number"?"":String(w[k]))).join(","))).join("\n"),a=document.createElement("a");a.href=URL.createObjectURL(new Blob([t],{type:"text/csv"}));a.download="stations.csv";a.click()};
+ init3d()}
+function init3d(){
+ cancelAnimationFrame(raf);GL=null;S3=null;secs=snap.reaches.map(q=>GVF.mkSec(q.section));
+ const rows=res.rows,n=rows.length,x0=rows[0].x,xe=rows[n-1].x,Lx=(xe-x0)||1,zs=rows.map(w=>w.z),dm=Math.max(...rows.map(w=>w.y)),rng=Math.max(...zs)-Math.min(...zs)+dm,Wm=Math.max(...rows.map(w=>secs[w._r].top(w.y)))*1.3;
+ const cl=(v,a,b)=>Math.min(b,Math.max(a,v)),r5=v=>Math.round(v*2)/2;
+ V.E=r5(cl(Math.min(.05*Lx/dm,.5*Lx/rng),1,100));V.W=r5(cl(.07*Lx/Wm,1,100));
+ const jb=rows.findIndex(w=>w.note.indexOf("jump toe")===0);V.idx=jb>=0?jb:Math.floor(n/2);V.px=x0;V.t=0;V.sp=1;V.follow=true;V.mode=0;V.ride=false;V.ortho=false;V.yaw=-.7;V.pitch=.5;V.dist=1.7;V.zoom=1;V.tg=[0,0,0];V.nd=false;V.cd=false;V.egl=false;
+ V.anim=!(window.matchMedia&&matchMedia("(prefers-reduced-motion: reduce)").matches);
+ TS=Lx/(8*Math.max(...rows.map(w=>w.v)));$("#tsn").textContent="animation runs "+TS.toFixed(TS<10?1:0)+"× faster than real time";
+ $("#ex").value=V.E;$("#wx").value=V.W;$("#sc").max=n-1;$("#sc").value=V.idx;$("#pl").textContent=V.anim?"⏸ Pause":"▶ Play";
+ $("#ev").textContent=V.E;$("#wv").textContent=V.W;
+ let ok=true;try{ok=!!initGL($("#gl"))}catch(e){ok=false;console.error(e)}
+ if(!ok){$("#glmsg").hidden=false;$("#gl").style.display="none";$("#ov").style.display="none";panels();return}
+ let T0=0;for(let k=0;k<400;k++){T0+=(Lx/400)/(at(x0+Lx*(k+.5)/400).v*TS)}V.int=T0/260;
+ PT=[];spawn=0;for(let tt=0;tt<T0;tt+=V.int){PT.forEach(p=>{p.x+=at(p.x).v*TS*V.int});PT=PT.filter(p=>p.x<xe);PT.push({x:x0,l:Math.random()*2-1})}
+ const rb=()=>{S3=sceneBuild();$("#ev").textContent=V.E;$("#wv").textContent=V.W;frame();panels()};
+ $("#ex").oninput=e=>{V.E=+e.target.value;rb()};$("#wx").oninput=e=>{V.W=+e.target.value;rb()};
+ $("#cm").onchange=e=>{V.mode=+e.target.value};$("#l_egl").onchange=e=>{V.egl=e.target.checked;rb()};$("#l_nd").onchange=e=>{V.nd=e.target.checked;rb()};$("#l_cd").onchange=e=>{V.cd=e.target.checked;rb()};
+ $("#sc").oninput=e=>{V.idx=+e.target.value;V.px=rows[V.idx].x;V.follow=false;$("#fo").checked=false;panels()};
+ $("#fo").onchange=e=>{V.follow=e.target.checked;if(V.follow)V.px=rows[V.idx].x;panels()};
+ $("#pl").onclick=e=>{V.anim=!V.anim;e.target.textContent=V.anim?"⏸ Pause":"▶ Play"};$("#sp").oninput=e=>{V.sp=+e.target.value};
+ const PV={"3d":{yaw:-.6,pitch:.5,dist:1.7,ortho:false,ride:false},top:{yaw:0,pitch:1.5707,ortho:true,ride:false},side:{yaw:0,pitch:0,ortho:true,ride:false},front:{yaw:-Math.PI/2,pitch:0,ortho:true,ride:false},ride:{yaw:-1.3,pitch:.3,dist:.3,ortho:false,ride:true}};
+ PV.jump=null;document.querySelectorAll("[data-v]").forEach(b=>b.onclick=()=>{if(b.dataset.v==="jump"){Object.assign(V,PV["3d"],{zoom:1,yaw:-.55,pitch:.85,tg:S3.focus?S3.focus.tg:[0,0,0],dist:S3.focus?S3.focus.dist:2.7});V.follow=false;$("#fo").checked=false;V.idx=Math.max(0,res.rows.findIndex(w=>w.note.indexOf("jump toe")===0));V.px=res.rows[V.idx].x;panels();return}Object.assign(V,PV[b.dataset.v],{zoom:1,tg:[0,0,0]});if(V.ride){V.follow=true;$("#fo").checked=true}});
+ const ov=$("#ov");let drag=null;
+ ov.onpointerdown=e=>{drag=[e.clientX,e.clientY,e.shiftKey];ov.setPointerCapture(e.pointerId);ov.style.cursor="grabbing"};
+ ov.onpointermove=e=>{if(!drag)return;const dx=e.clientX-drag[0],dy=e.clientY-drag[1];
+  if(drag[2]&&!V.ride){const cy=Math.cos(V.yaw),sy=Math.sin(V.yaw),k=V.dist*.0016;V.tg=[V.tg[0]-dx*k*cy,V.tg[1]+dy*k,V.tg[2]+dx*k*sy]}else{V.yaw-=dx*.008;V.pitch=cl(V.pitch+dy*.008,-.05,1.5707);if(V.ortho&&!(V.pitch===1.5707&&V.yaw===0))V.ortho=false}drag=[e.clientX,e.clientY,drag[2]]};
+ ov.onpointerup=()=>{drag=null;ov.style.cursor="grab"};ov.style.cursor="grab";ov.style.touchAction="none";
+ ov.onwheel=e=>{e.preventDefault();const k=Math.exp(e.deltaY*.0015);if(V.ortho)V.zoom=cl(V.zoom/k,.3,12);else V.dist=cl(V.dist*k,.03,9)};
+ ov.ondblclick=()=>{V.zoom=1;V.dist=1.7;V.tg=[0,0,0]};window.onresize=()=>frame();
+ S3=sceneBuild();if(S3.focus){document.querySelector('[data-v="jump"]').click()}panels();last=performance.now();raf=requestAnimationFrame(loop)}
+function run(){read();try{res=GVF.compute(st);snap=D(st);show()}catch(e){$("#out").innerHTML=`<section class="err"><h2>Please check the inputs</h2><p>${esc(e.friendly?e.message[0].toUpperCase()+e.message.slice(1):"Unexpected problem: "+e.message)}</p></section>`}}
+function load(i){cur=i;st=D(P[i]);st.egl=true;st.tolerance??=1e-6;st.start_bed_elevation??=100;st.step??=1;st.upstream??={type:"normal"};st.downstream??={type:"normal"};render();run()}
+document.addEventListener("change",e=>{if(e.target.id=="pre")return load(+e.target.value);if(e.target.tagName=="SELECT"){read();if(/type$/.test(e.target.dataset.p||"")){render();$("#pre").value=cur}}});
+document.addEventListener("click",e=>{const a=e.target.dataset.a;if(!a)return;read();if(a=="add"){const l=st.reaches[st.reaches.length-1];st.reaches.push(D(l));render()}else if(a.startsWith("del")){st.reaches.splice(+a.slice(3),1);render()}else run()});
+document.addEventListener("keydown",e=>{if(e.key=="Enter"&&e.target.matches("input[data-p]"))run()});
+load(0)})();
+</script></body></html>

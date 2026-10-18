@@ -1,0 +1,12 @@
+{
+  "name": "Horizontal then adverse slope ending in a free overfall (H2, A2)",
+  "discharge": 3.0,
+  "start_bed_elevation": 10.0,
+  "step": 5.0,
+  "upstream": {"type": "none"},
+  "downstream": {"type": "overfall"},
+  "reaches": [
+    {"length": 200, "slope": 0.0,     "n": 0.015, "section": {"type": "rectangular", "width": 3}},
+    {"length": 150, "slope": -0.0005, "n": 0.015, "section": {"type": "rectangular", "width": 3}}
+  ]
+}
